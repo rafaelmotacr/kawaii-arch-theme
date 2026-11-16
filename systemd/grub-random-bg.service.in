@@ -1,0 +1,40 @@
+# Kawaii Arch Theme - Background Service
+# KAWAII-UNIT-REVISION=2
+# Gerado a partir de grub-random-bg.service.in; @THEME_DIR@ e substituido
+# pelo diretorio real do tema (instalador / kawaii-arch-manager).
+[Unit]
+Description=Kawaii Arch Theme: sorteia o wallpaper do GRUB para o proximo boot
+# O filesystem que contem o tema (ex.: /boot separado) e os dados precisam
+# estar montados; o helper ainda confere a montagem antes de escrever.
+RequiresMountsFor=@THEME_DIR@ /var/lib/kawaii-arch-manager
+After=local-fs.target
+ConditionPathExists=/usr/lib/kawaii-arch-manager/grub-random-bg.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/kawaii-arch-manager/grub-random-bg.sh
+TimeoutStartSec=2min
+# Permissoes minimas: escrita somente no tema e no estado
+ProtectSystem=strict
+ReadWritePaths=@THEME_DIR@ /var/lib/kawaii-arch-manager/state
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

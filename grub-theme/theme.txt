@@ -1,0 +1,93 @@
+# Main options
+title-text: ""
+# Wallpaper ativo: arquivo unico, nunca altere este caminho.
+# O conteudo de background.png e trocado (copia atomica) pelo
+# Background Helper / kawaii-arch-manager; os bundles ficam em
+# /var/lib/kawaii-arch-manager/bundles (fora da particao de boot).
+desktop-image: "background.png"
+desktop-color: "#000000"
+terminal-font: "Terminus Regular 16"
+terminal-box: "terminal_box_*.png"
+# Terminal centralizado: 60% x 60% da tela, com 20% de margem em cada lado.
+# Para mudar o tamanho, mantenha left = (100 - width) / 2 e
+# top = (100 - height) / 2 (apenas numeros inteiros).
+terminal-left: "20%"
+terminal-top: "20%"
+terminal-width: "60%"
+terminal-height: "60%"
+terminal-border: "0"
+
+
+# Boot menu
+# Somente icone + nome de cada sistema. Icones mantidos em 75x75.
+# A largura e fixa em pixels (as fontes do GRUB tambem sao em pixels),
+# entao a selecao fica do tamanho do maior texto em qualquer resolucao:
+#   3 (padding) + 75 (icone) + 20 (espaco) + ~390 (texto) + 3 (padding)
+# 390 px comporta "Advanced options for Arch Linux" em Public Sans Bold 21.
+#
+# Contorno "liquid glass" (boot_menu_box_*.png, mesmo contorno da caixa do
+# terminal, sem preenchimento; gerado por tools/make_glass.py). O GRUB
+# desenha essa moldura DENTRO dos limites do menu e reserva 16 px (tamanho
+# dos tiles) de cada lado para ela. Por isso os limites abaixo sao a area
+# das entradas (5%, 36%, 490 x 44%) expandida em 16 px por lado: as entradas
+# continuam no mesmo lugar e com o mesmo tamanho, e o contorno as envolve.
+#   left = 5% - 16   top = 36% - 16   width = 490 + 32   height = 44% + 32
+# Se algum nome for cortado, aumente "width" (mantendo os +32 do contorno);
+# para encolher a selecao, diminua.
++ boot_menu {
+  left = 5%-16
+  top = 36%-16
+  width = 522
+  height = 44%+32
+  menu_pixmap_style = "boot_menu_box_*.png"
+  item_font = "Public Sans Bold 21"
+  item_color = "#dddddd"
+  selected_item_color = "#ffffff"
+  icon_width = 75
+  icon_height = 75
+  item_icon_space = 20
+  item_height = 70
+  item_padding = 3
+  item_spacing = 13
+  selected_item_pixmap_style = "select_*.png"
+  scrollbar = false
+}
+
+
+# >>> logo
+# (bloco ativado/desativado pelo install.sh - mantenha os marcadores)
+# Logo do Arch Linux
+# Mesma margem esquerda do menu, abaixo dele e acima da barra de progresso.
+# Tamanho original da imagem (256x85) para nao haver redimensionamento.
+# top = topo da barra (99%) - altura do logo (85) - folga (30) = 99%-115
+# Para mudar a folga, altere o numero: 99%-(85 + folga desejada).
++ image {
+  file = "arch-logo.png"
+  left = 5%
+  top = 99%-115
+  width = 256
+  height = 85
+}
+# <<< logo
+
+
+# Show progress
++ progress_bar {
+  id = "__timeout__"
+  left = 0%
+  width = 100%
+  top = 99%
+  height = 31
+  show_text = false
+  text = ""
+  # A barra visivel e a faixa branca de progress_highlight_c.png crescendo
+  # sobre o wallpaper (sem fundo). Com highlight_style definido, o GRUB
+  # desenha so as imagens e NAO usa as tres cores abaixo; elas so valem se
+  # highlight_style for removido. Mantidas coerentes com o tema: frente
+  # branca (igual a faixa) e fundo/borda no mesmo neutro escuro do vidro do
+  # terminal. O GRUB pinta essas cores opacas (sem transparencia).
+  fg_color = "#ffffff"
+  bg_color = "#0a0a0c"
+  border_color = "#0a0a0c"
+  highlight_style = "progress_highlight_*.png"
+}

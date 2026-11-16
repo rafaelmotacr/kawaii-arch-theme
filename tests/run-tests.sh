@@ -1,0 +1,502 @@
+#!/usr/bin/env bash
+# =====================================================================
+#  Testes do Kawaii Arch Theme (manager, helper, instalador)
+#
+#  Executa tudo em sandbox (KAWAII_ROOT) com um systemctl falso: nao
+#  requer root e nao altera o sistema real.
+#
+#  Uso: tests/run-tests.sh [--keep]
+# =====================================================================
+set -uo pipefail
+export LC_ALL=C
+
+PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KEEP=0; [[ "${1:-}" == "--keep" ]] && KEEP=1
+T="$(mktemp -d "${TMPDIR:-/tmp}/kawaii-tests.XXXXXX")"
+((KEEP)) || trap 'rm -rf "$T"' EXIT
+
+PASS=0; FAIL=0
+ok()   { PASS=$((PASS + 1)); printf '  \e[32mok\e[0m   %s\n' "$*"; }
+bad()  { FAIL=$((FAIL + 1)); printf '  \e[31mFALHA\e[0m %s\n' "$*"; }
+check() { local d="$1"; shift; if "$@"; then ok "$d"; else bad "$d"; fi; }
+# expect_rc CODIGO descricao comando...
+expect_rc() {
+    local want="$1" d="$2"; shift 2
+    local out rc
+    out="$("$@" 2>&1)"; rc=$?
+    if [[ "$rc" == "$want" ]]; then ok "$d (rc=$rc)"; else bad "$d (rc=$rc, esperado $want)"; printf '%s\n' "$out" | sed 's/^/        | /' | tail -n 8; fi
+}
+section() { printf '\n\e[1m%s\e[0m\n' "$*"; }
+
+# --- Ferramentas de teste --------------------------------------------
+cat > "$T/mkpng.py" <<'EOF'
+import struct, sys, zlib
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+def png(path, w=8, h=8, color=2, interlace=0, seed=0):
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+    raw = b"".join(b"\0" + bytes([(seed * 37 + x * 13 + y) & 255 for x in range(w * bpp)]) for y in range(h))
+    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, color, 0, 0, interlace))
+    if color == 3:
+        data += chunk(b"PLTE", bytes(range(256)) * 3)
+    data += chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    open(path, "wb").write(data)
+args = sys.argv[1:]
+png(args[0], color=int(args[1]) if len(args) > 1 else 2,
+    interlace=int(args[2]) if len(args) > 2 else 0, seed=int(args[3]) if len(args) > 3 else 0)
+EOF
+mkpng() { python3 -I "$T/mkpng.py" "$@"; }
+
+# Bundle de teste: mkbundle DIR ID VERSAO N [nome]
+mkbundle() {
+    local dir="$1" id="$2" ver="$3" n="$4" name="${5:-$2}" i
+    mkdir -p "$dir/backgrounds"
+    printf 'ID="%s"\nNAME="%s"\nVERSION="%s"\nAUTHOR="tests"\nDESCRIPTION="Bundle de teste %s."\n' "$id" "$name" "$ver" "$id" > "$dir/manifest.conf"
+    for ((i = 1; i <= n; i++)); do mkpng "$dir/backgrounds/background$i.png" 2 0 "$i$RANDOM"; done
+}
+
+# systemctl falso: registra chamadas e mantem estado habilitado
+cat > "$T/systemctl" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >> "$T/systemctl.log"
+state="$T/systemctl.enabled"
+args=(); for a in "\$@"; do [[ "\$a" == --* ]] || args+=("\$a"); done
+case "\${args[0]}" in
+  is-enabled) q=0; [[ " \$* " == *" --quiet "* ]] && q=1; if [[ -f "\$state" ]]; then ((q)) || echo enabled; exit 0; else ((q)) || echo disabled; exit 1; fi ;;
+  is-active)  echo inactive; exit 3 ;;
+  enable)     touch "\$state" ;;
+  disable)    rm -f "\$state" ;;
+  start|stop|daemon-reload) ;;
+esac
+exit 0
+EOF
+chmod +x "$T/systemctl"
+
+# grub-mkconfig falso: nunca deve ser chamado por troca de wallpaper
+mkdir -p "$T/bin"
+printf '#!/bin/sh\necho "$@" >> "%s/grub-mkconfig.log"\nexit 1\n' "$T" > "$T/bin/grub-mkconfig"
+chmod +x "$T/bin/grub-mkconfig"
+export PATH="$T/bin:$PATH"
+
+# --- Build ------------------------------------------------------------
+section "Build do manager"
+if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "compilacao"
+else bad "compilacao"; cat "$T/build.log"; exit 1; fi
+MGR="$T/build/kawaii-arch-manager"
+check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.1.0' ]]"
+check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
+expect_rc 2 "argumento invalido" "$MGR" --nao-existe
+expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
+expect_rc 2 "modo invalido" "$MGR" --set-mode aleatorio
+
+# --- Sandbox do manager/helper ---------------------------------------
+R="$T/root"
+export KAWAII_ROOT="$R" KAWAII_SKIP_ROOT_CHECK=1 KAWAII_SYSTEMCTL="$T/systemctl"
+THEME="$R/boot/grub/themes/kawaii-arch-theme"
+DATA="$R/var/lib/kawaii-arch-manager"
+mkdir -p "$THEME" "$DATA/config" "$DATA/state" "$R/usr/share/kawaii-arch-manager/payload/bundles"
+cp "$PKG/grub-theme/theme.txt" "$PKG/grub-theme/fallback.png" "$THEME/"
+printf 'THEME_DIR="/boot/grub/themes/kawaii-arch-theme"\nEXPECTED_MOUNT="%s"\n' "$(stat -c %m "$THEME")" > "$DATA/config/paths.conf"
+PAY="$R/usr/share/kawaii-arch-manager/payload"
+cp "$PKG/helper/grub-random-bg.sh" "$PAY/"; cp "$PKG/systemd/grub-random-bg.service.in" "$PAY/"
+cp "$PKG/grub-theme/VERSION" "$PAY/theme-version"
+HELPER="$R/usr/lib/kawaii-arch-manager/grub-random-bg.sh"
+
+B="$T/bundles"
+mkbundle "$B/gothic" gothic 1.0.0 3 Gothic
+mkbundle "$B/angelic" angelic 1.0.0 1 Angelic
+mkbundle "$B/big" big 1.0.0 10 Big
+for b in gothic angelic big; do "$PKG/tools/make-kawall.sh" "$B/$b" "$T/$b.kawall" >/dev/null; done
+
+section "Importacao de bundles"
+expect_rc 0 "dry-run valida sem instalar" "$MGR" --dry-run --import-bundle "$T/gothic.kawall"
+check "dry-run nao criou bundle" test ! -e "$DATA/bundles/gothic"
+for b in gothic angelic big; do expect_rc 0 "importa $b" "$MGR" --import-bundle "$T/$b.kawall"; done
+check "imagens identicas aos originais" cmp -s "$B/gothic/backgrounds/background2.png" "$DATA/bundles/gothic/backgrounds/background2.png"
+check "arquivos importados sem permissao de execucao" bash -c "! find '$DATA/bundles' -type f -perm /111 | grep -q ."
+expect_rc 4 "mesma versao nao e sobrescrita" "$MGR" --import-bundle "$T/gothic.kawall"
+mkbundle "$B/gothic-old" gothic 0.9.0 2; "$PKG/tools/make-kawall.sh" "$B/gothic-old" "$T/gothic-old.kawall" >/dev/null
+expect_rc 4 "downgrade recusado" "$MGR" --import-bundle "$T/gothic-old.kawall"
+mkbundle "$B/gothic-new" gothic 1.1.0 4; "$PKG/tools/make-kawall.sh" "$B/gothic-new" "$T/gothic-new.kawall" >/dev/null
+expect_rc 4 "atualizacao sem tty e sem --yes pede confirmacao" "$MGR" --import-bundle "$T/gothic-new.kawall" </dev/null
+expect_rc 0 "atualizacao para versao mais nova (--yes)" "$MGR" --yes --import-bundle "$T/gothic-new.kawall"
+check "versao atualizada para 1.1.0 com 4 imagens" bash -c "grep -q 1.1.0 '$DATA/bundles/gothic/manifest.conf' && [[ \$(ls '$DATA/bundles/gothic/backgrounds' | wc -l) == 4 ]]"
+check "sem diretorios temporarios restantes" bash -c "! ls -A '$DATA/bundles' | grep -q '^\.'"
+expect_rc 0 "--list-bundles" "$MGR" --list-bundles
+check "nome de exibicao vem do NAME do manifest" bash -c "'$MGR' --list-bundles | grep -qE 'angelic .* Angelic$'"
+mkbundle "$B/noname" noname 1.0.0 1; sed -i '/^NAME=/d' "$B/noname/manifest.conf"
+"$PKG/tools/make-kawall.sh" "$B/noname" "$T/noname.kawall" >/dev/null
+expect_rc 0 "importa bundle sem NAME (opcional)" "$MGR" --yes --import-bundle "$T/noname.kawall"
+check "sem NAME, o nome exibido e o ID" bash -c "'$MGR' --list-bundles | grep -qE 'noname +1\.0\.0 .* noname\$'"
+expect_rc 0 "remove bundle sem NAME" "$MGR" --yes --remove-bundle noname
+expect_rc 0 "--list-available-bundles DIR" "$MGR" --list-available-bundles "$T"
+
+section "Importacao a partir de pasta extraida"
+mkbundle "$B/folder" folder 1.0.0 3 Folder
+echo "nota" > "$B/folder/LEIAME.txt"
+expect_rc 0 "dry-run de pasta valida sem instalar" "$MGR" --dry-run --import-bundle "$B/folder"
+check "dry-run de pasta nao criou bundle" test ! -e "$DATA/bundles/folder"
+expect_rc 0 "importa a pasta do bundle" "$MGR" --yes --import-bundle "$B/folder"
+check "imagens copiadas identicas" cmp -s "$B/folder/backgrounds/background3.png" "$DATA/bundles/folder/backgrounds/background3.png"
+check "arquivos fora de manifest/backgrounds nao sao copiados" test ! -e "$DATA/bundles/folder/LEIAME.txt"
+check "pasta de origem preservada" test -f "$B/folder/backgrounds/background1.png"
+check "sem diretorios temporarios apos importar pasta" bash -c "! ls -A '$DATA/bundles' | grep -q '^\.'"
+expect_rc 4 "mesma versao a partir de pasta nao e sobrescrita" "$MGR" --import-bundle "$B/folder"
+expect_rc 0 "remove o bundle importado da pasta" "$MGR" --yes --remove-bundle folder
+mkdir -p "$T/extraido"; tar -xf "$T/angelic.kawall" -C "$T/extraido"
+sed -i 's/^VERSION=.*/VERSION="1.0.1"/' "$T/extraido/angelic/manifest.conf"
+expect_rc 0 "pasta com o bundle num unico subdiretorio (tar -xf)" "$MGR" --yes --import-bundle "$T/extraido"
+check "versao da pasta extraida aplicada" grep -q '1.0.1' "$DATA/bundles/angelic/manifest.conf"
+mkdir -p "$T/dois"; cp -r "$B/gothic" "$B/big" "$T/dois/"
+expect_rc 3 "pasta com dois bundles e recusada" "$MGR" --import-bundle "$T/dois"
+mkdir -p "$T/vazia"
+expect_rc 3 "pasta sem manifest.conf e recusada" "$MGR" --import-bundle "$T/vazia"
+mkbundle "$B/dlink" dlink 1.0.0 1; ln -s /etc/passwd "$B/dlink/backgrounds/background9.png"
+expect_rc 3 "pasta com link simbolico em backgrounds/ e recusada" "$MGR" --import-bundle "$B/dlink"
+mkbundle "$B/dmlink" dmlink 1.0.0 1; mv "$B/dmlink/manifest.conf" "$T/dmlink-manifest"; ln -s "$T/dmlink-manifest" "$B/dmlink/manifest.conf"
+expect_rc 3 "manifest.conf como link simbolico e recusado" "$MGR" --import-bundle "$B/dmlink"
+mkbundle "$B/dfifo" dfifo 1.0.0 1; mkfifo "$B/dfifo/backgrounds/background9.png"
+expect_rc 3 "pasta com fifo em backgrounds/ e recusada" "$MGR" --import-bundle "$B/dfifo"
+mkbundle "$B/dbad" dbad 1.0.0 1; sed -i 's/^ID=.*/ID="..\/fora"/' "$B/dbad/manifest.conf"
+expect_rc 3 "ID invalido no manifest da pasta e recusado" "$MGR" --import-bundle "$B/dbad"
+check "nenhum bundle invalido instalado a partir de pasta" bash -c "! ls '$DATA/bundles' | grep -qE '^(dlink|dmlink|dfifo|dbad|fora)$'"
+
+section "Seguranca da importacao (pacotes maliciosos)"
+cat > "$T/evil.py" <<'EOF'
+import io, sys, tarfile
+out, kind = sys.argv[1], sys.argv[2]
+png = open(sys.argv[3], "rb").read()
+def add(tf, name, data=b"", type_=tarfile.REGTYPE, link="", size=None):
+    ti = tarfile.TarInfo(name); ti.type = type_; ti.linkname = link; ti.mode = 0o644
+    if type_ == tarfile.REGTYPE:
+        ti.size = len(data) if size is None else size
+        tf.addfile(ti, io.BytesIO(data))
+    else:
+        tf.addfile(ti)
+meta = lambda i="evil", v="1.0.0": [("%s/manifest.conf" % i, ('ID="%s"\nVERSION="%s"\n' % (i, v)).encode())]
+with tarfile.open(out, "w", format=tarfile.GNU_FORMAT) as tf:
+    if kind == "rawsize":
+        pass
+    else:
+        for n, d in meta(*{"badid": ("Bad_ID",), "badver": ("evil", "1.0"), "mismatch": ("other",)}.get(kind, ())):
+            if kind == "mismatch": n = n.replace("other/", "evil/", 1)
+            if kind == "nomanifest" and n.endswith("manifest.conf"): continue
+            add(tf, n, d)
+    top = "Bad_ID" if kind == "badid" else "evil"
+    if kind != "noimages":
+        add(tf, top + "/backgrounds/background1.png", png)
+    if kind == "traversal": add(tf, "evil/backgrounds/../../../escape.png", png)
+    if kind == "absolute":  add(tf, "/tmp/kawaii-escape.png", png)
+    if kind == "symlink":   add(tf, "evil/backgrounds/link.png", type_=tarfile.SYMTYPE, link="/etc/passwd")
+    if kind == "hardlink":  add(tf, "evil/backgrounds/hard.png", type_=tarfile.LNKTYPE, link="evil/backgrounds/background1.png")
+    if kind == "fifo":      add(tf, "evil/backgrounds/fifo.png", type_=tarfile.FIFOTYPE)
+    if kind == "device":    add(tf, "evil/backgrounds/dev.png", type_=tarfile.CHRTYPE)
+    if kind == "twotops":   add(tf, "other/backgrounds/background1.png", png)
+    if kind == "rootfile":  add(tf, "README", b"hi")
+    if kind == "dup":       add(tf, "evil/backgrounds/background1.png", png)
+if kind == "rawsize":
+    # cabecalho declarando 600 MiB sem os dados (limite por arquivo)
+    ti = tarfile.TarInfo("evil/backgrounds/huge.png"); ti.size = 600 * 1024 * 1024
+    open(out, "wb").write(ti.tobuf(format=tarfile.GNU_FORMAT) + b"\0" * 1024)
+EOF
+mkpng "$T/ok.png"; mkpng "$T/palette.png" 3; mkpng "$T/interlaced.png" 2 1
+for kind in traversal absolute symlink hardlink fifo device twotops rootfile dup badid badver mismatch nomanifest noimages rawsize; do
+    python3 -I "$T/evil.py" "$T/evil-$kind.kawall" "$kind" "$T/ok.png"
+    expect_rc 3 "rejeita: $kind" "$MGR" --yes --import-bundle "$T/evil-$kind.kawall"
+done
+python3 -I "$T/evil.py" "$T/evil-pal.kawall" noimages "$T/ok.png"
+check "nenhum bundle 'evil' instalado" test ! -e "$DATA/bundles/evil"
+check "nada escapou da sandbox" bash -c "[[ ! -e /tmp/kawaii-escape.png && ! -e '$DATA/escape.png' && ! -e '$T/escape.png' ]]"
+mkbundle "$B/pal" pal 1.0.0 0; mkpng "$B/pal/backgrounds/background1.png" 3; mkpng "$B/pal/backgrounds/background2.png" 2 1
+"$PKG/tools/make-kawall.sh" "$B/pal" "$T/pal.kawall" >/dev/null
+expect_rc 3 "rejeita bundle so com PNG paleta/entrelacado (incompativeis com o GRUB)" "$MGR" --import-bundle "$T/pal.kawall"
+printf 'nao sou tar' > "$T/lixo.kawall"
+expect_rc 3 "rejeita arquivo corrompido" "$MGR" --import-bundle "$T/lixo.kawall"
+expect_rc 2 "rejeita caminho inexistente" "$MGR" --import-bundle "$T/nao-existe.kawall"
+
+section "Configuracao e modos (manager sem helper)"
+rm -f "$DATA/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
+expect_rc 4 "modo set sem bundle selecionado" "$MGR" --set-mode set
+expect_rc 3 "set-bundle inexistente" "$MGR" --set-bundle nada
+expect_rc 0 "set-bundle gothic" "$MGR" --set-bundle gothic
+expect_rc 0 "set-mode set" "$MGR" --set-mode set
+expect_rc 0 "randomize sem helper (selecao interna)" "$MGR" --randomize
+check "background.png veio do bundle gothic" bash -c "for f in '$DATA'/bundles/gothic/backgrounds/*; do cmp -s \"\$f\" '$THEME/background.png' && exit 0; done; exit 1"
+check "last-background atualizado" grep -q '^gothic/' "$DATA/state/last-background"
+prev=""; rep=0
+for i in $(seq 15); do "$MGR" --randomize >/dev/null 2>&1; cur="$(cat "$DATA/state/last-background")"; [[ "$cur" == "$prev" ]] && rep=1; prev="$cur"; done
+check "nao repete a ultima imagem (15 sorteios, manager)" test "$rep" = 0
+expect_rc 0 "set-background angelic/background1" "$MGR" --set-background angelic/background1
+check "modo fixed aplicado imediatamente" bash -c "cmp -s '$DATA/bundles/angelic/backgrounds/background1.png' '$THEME/background.png' && grep -q 'MODE=\"fixed\"' '$DATA/config/backgrounds.conf'"
+expect_rc 3 "set-background arquivo inexistente" "$MGR" --set-background angelic/background9.png
+expect_rc 4 "remocao do bundle selecionado e bloqueada" "$MGR" --yes --remove-bundle angelic
+expect_rc 6 "remocao cancelada sem confirmacao" bash -c "echo n | script -qec '$MGR --remove-bundle big' /dev/null"
+expect_rc 0 "--status sem helper/servico" "$MGR" --status
+
+section "Background Helper"
+expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
+expect_rc 0 "--install-helper" "$MGR" --install-helper
+check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.0.0 ]]"
+expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
+prev=""; rep=0
+for i in $(seq 15); do "$HELPER" -q || bad "helper rc=$?"; cur="$(cat "$DATA/state/last-background")"; [[ "$cur" == "$prev" ]] && rep=1; prev="$cur"; done
+check "helper: modo set sem repeticao (15 sorteios)" test "$rep" = 0
+check "helper: escolhe so do bundle selecionado" grep -q '^gothic/' "$DATA/state/last-background"
+check "sem background.png.tmp residual" test ! -e "$THEME/background.png.tmp"
+
+# Distribuicoes (dry-run, sem last-background)
+rm -f "$DATA/state/last-background"
+N=700
+dist() { local i; for ((i = 0; i < N; i++)); do "$HELPER" --dry-run; done | sort | uniq -c; }
+printf 'MODE="global"\n' > "$DATA/config/backgrounds.conf"
+g="$(dist)"
+check "global: 15 imagens elegiveis" test "$(wc -l <<< "$g")" = 15
+check "global: probabilidade por imagem (angelic ~1/15, nao ~1/3)" bash -c "c=\$(awk '/angelic/{print \$1}' <<< '$g'); (( c > 15 && c < 100 ))"
+printf 'MODE="balanced"\n' > "$DATA/config/backgrounds.conf"
+bl="$(dist)"
+check "balanced: angelic (1 imagem) recebe ~1/3 dos sorteios" bash -c "c=\$(awk '/angelic/{print \$1}' <<< '$bl'); (( c > 170 && c < 300 ))"
+check "balanced: big (10 imagens) recebe ~1/3 no total" bash -c "c=\$(awk '/big\\//{s+=\$1} END{print s}' <<< '$bl'); (( c > 170 && c < 300 ))"
+
+section "Falhas preservam o wallpaper valido"
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/backgrounds.conf"
+"$HELPER" -q; cp "$THEME/background.png" "$T/before.png"
+printf 'MODE="set"\nSELECTED_BUNDLE="removido"\n' > "$DATA/config/backgrounds.conf"
+expect_rc 3 "bundle selecionado ausente -> erro de configuracao" "$HELPER"
+check "  wallpaper anterior preservado" cmp -s "$T/before.png" "$THEME/background.png"
+printf 'MODE="xyz"\n' > "$DATA/config/backgrounds.conf"
+expect_rc 3 "modo invalido" "$HELPER"
+check "  wallpaper anterior preservado" cmp -s "$T/before.png" "$THEME/background.png"
+printf 'MODE="fixed"\nSELECTED_BACKGROUND="gothic/../../etc/passwd"\n' > "$DATA/config/backgrounds.conf"
+expect_rc 3 "SELECTED_BACKGROUND com traversal e rejeitado" "$HELPER"
+rm -f "$THEME/background.png"
+expect_rc 3 "sem selecao valida e sem background.png -> fallback.png" "$HELPER"
+check "  fallback.png aplicado" cmp -s "$THEME/fallback.png" "$THEME/background.png"
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/backgrounds.conf"
+cp "$THEME/background.png" "$T/before.png"
+sed -i 's|^EXPECTED_MOUNT=.*|EXPECTED_MOUNT="/particao-nao-montada"|' "$DATA/config/paths.conf"
+expect_rc 5 "particao esperada nao montada -> nao escreve" "$HELPER"
+expect_rc 5 "manager: idem (selecao interna)" env KAWAII_ROOT="$R" bash -c "mv '$HELPER' '$HELPER.off'; '$MGR' --randomize; rc=\$?; mv '$HELPER.off' '$HELPER'; exit \$rc"
+check "  wallpaper anterior preservado" cmp -s "$T/before.png" "$THEME/background.png"
+sed -i "s|^EXPECTED_MOUNT=.*|EXPECTED_MOUNT=\"$(stat -c %m "$THEME")\"|" "$DATA/config/paths.conf"
+mkdir -p "$R/etc"; printf '/dev/sdz1 /boot vfat defaults 0 2\n' > "$R/etc/fstab"
+expect_rc 5 "/boot declarado no fstab mas nao montado -> nao escreve" "$HELPER"
+rm -f "$R/etc/fstab"
+chmod 000 "$DATA/bundles/gothic/backgrounds/background1.png"
+for i in 1 2 3 4 5 6; do "$HELPER" -q 2>/dev/null; done
+check "imagem ilegivel e ignorada, outras usadas" bash -c "! grep -q 'gothic/background1.png' '$DATA/state/last-background' && png=\$(od -An -tx1 -N4 '$THEME/background.png' | tr -d ' '); [[ \$png == 89504e47 ]]"
+chmod 644 "$DATA/bundles/gothic/backgrounds/background1.png"
+if unshare -rm true 2>/dev/null; then
+    expect_rc 0 "helper com o tema bind-montado (como ReadWritePaths= do systemd)" \
+        unshare -rm bash -c "mount --bind '$THEME' '$THEME' && KAWAII_ROOT='$R' '$HELPER' -q"
+    expect_rc 0 "manager com o tema bind-montado" \
+        unshare -rm bash -c "mount --bind '$THEME' '$THEME' && mv '$HELPER' '$HELPER.off'; KAWAII_ROOT='$R' KAWAII_SKIP_ROOT_CHECK=1 '$MGR' --randomize; rc=\$?; mv '$HELPER.off' '$HELPER'; exit \$rc"
+fi
+check "troca de wallpaper nunca executa grub-mkconfig" test ! -e "$T/grub-mkconfig.log"
+check "theme.txt nunca e alterado pelo helper" cmp -s "$PKG/grub-theme/theme.txt" "$THEME/theme.txt"
+expect_rc 0 "helper funciona sem o manager no PATH" env -i PATH=/usr/bin:/bin KAWAII_ROOT="$R" "$HELPER" -q
+
+section "Servico systemd"
+: > "$T/systemctl.log"
+expect_rc 0 "--install-service" "$MGR" --install-service
+UNIT="$R/usr/lib/systemd/system/grub-random-bg.service"
+check "unidade com caminho real do tema" grep -q 'RequiresMountsFor=/boot/grub/themes/kawaii-arch-theme ' "$UNIT"
+check "nao habilitada automaticamente" test ! -e "$T/systemctl.enabled"
+check "daemon-reload executado" grep -qx daemon-reload "$T/systemctl.log"
+: > "$T/systemctl.log"
+expect_rc 0 "--install-service idempotente" "$MGR" --install-service
+check "sem daemon-reload quando nada muda" bash -c "! grep -q daemon-reload '$T/systemctl.log'"
+expect_rc 0 "--enable-service" "$MGR" --enable-service
+check "habilitado" test -e "$T/systemctl.enabled"
+expect_rc 4 "--uninstall helper bloqueado pelo servico" "$MGR" --yes --uninstall helper
+expect_rc 0 "--disable-service" "$MGR" --disable-service
+expect_rc 0 "--update (nada a fazer)" "$MGR" --yes --update
+expect_rc 0 "--uninstall service" "$MGR" --yes --uninstall service
+expect_rc 0 "--uninstall helper" "$MGR" --yes --uninstall helper
+check "bundles e configuracao preservados" bash -c "[[ -d '$DATA/bundles/gothic' && -f '$DATA/config/backgrounds.conf' ]]"
+expect_rc 0 "--remove-bundle big" "$MGR" --yes --remove-bundle big
+check "bundle removido" test ! -e "$DATA/bundles/big"
+if command -v systemd-analyze >/dev/null; then
+    sed 's|@THEME_DIR@|/boot/grub/themes/kawaii-arch-theme|g' "$PKG/systemd/grub-random-bg.service.in" > "$T/grub-random-bg.service"
+    check "systemd-analyze verify (sintaxe da unidade)" bash -c "! systemd-analyze verify '$T/grub-random-bg.service' 2>&1 | grep -v -e 'not executable' -e 'No such file' -e 'not found' -e 'Failed to prepare' -e 'Command .* is not' | grep -q ."
+fi
+unset KAWAII_ROOT
+
+# --- Instalador ------------------------------------------------------
+# Pacote de teste: copia do pacote com bundles sinteticos (os bundles reais
+# nao fazem parte do repositorio)
+PKGT="$T/pkg"; mkdir -p "$PKGT"
+cp -r "$PKG/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$PKG/tools" "$PKGT/"
+rm -rf "$PKGT/manager/build" "$PKGT/manager/out"
+mkbundle "$PKGT/bundles/alpha" alpha 1.0.0 3 Alpha
+mkbundle "$PKGT/bundles/beta" beta 1.0.0 2 Beta
+mkbundle "$PKGT/bundles/gamma" gamma 1.0.0 2 Gamma
+
+section "Instalador: instalacao completa"
+L="$T/full-root"
+LT="$L/boot/grub/themes/kawaii-arch-theme"
+LD="$L/var/lib/kawaii-arch-manager"
+mkdir -p "$L/boot/grub" "$L/etc/default"
+printf 'GRUB_TIMEOUT=5\nGRUB_GFXMODE=auto\nGRUB_THEME="/boot/grub/themes/kawaii-arch-theme/theme.txt"\n' > "$L/etc/default/grub"
+printf 'insmod gfxterm\nloadfont ($root)/grub/themes/kawaii-arch-theme/%s\n' $(cd "$PKG/grub-theme" && ls *.pf2) > "$L/boot/grub/grub.cfg"
+echo 'set theme=($root)/grub/themes/kawaii-arch-theme/theme.txt' >> "$L/boot/grub/grub.cfg"
+rm -f "$T/systemctl.enabled"; : > "$T/systemctl.log"
+export KAWAII_ROOT="$L" KAWAII_SYSTEMCTL="$T/systemctl"
+expect_rc 0 "install.sh --yes --enable-service" "$PKGT/install.sh" --yes --enable-service
+check "--yes instala todos os bundles do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
+check "theme.txt aponta para background.png" grep -qx 'desktop-image: "background.png"' "$LT/theme.txt"
+check "fallback.png instalado" test -f "$LT/fallback.png"
+check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundles/*/backgrounds/*.png; do cmp -s \"\$f\" '$LT/background.png' && exit 0; done; exit 1"
+check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.1.0' ]]"
+check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
+check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
+check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"
+check "logo ativado por padrao" bash -c "sed -n '/# >>> logo/,/# <<< logo/p' '$LT/theme.txt' | grep -q '^+ image'"
+sha_before="$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+: > "$T/systemctl.log"
+expect_rc 0 "segunda execucao (idempotente)" "$PKGT/install.sh" --yes
+sha_after="$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+check "nenhum arquivo alterado na segunda execucao" test "$sha_before" = "$sha_after"
+check "sem daemon-reload/enable/disable na segunda execucao" bash -c "! grep -qE 'daemon-reload|^enable|^disable' '$T/systemctl.log'"
+check "servico continua habilitado" test -e "$T/systemctl.enabled"
+check "manager instalado gerencia a sandbox" "$L/usr/bin/kawaii-arch-manager" --list-bundles
+
+section "Instalador: atualizacao do tema"
+bg_before="$(sha256sum < "$LT/background.png")"
+echo 1.9.0 > "$LT/VERSION"; echo '# antigo' >> "$LT/theme.txt"
+expect_rc 0 "tema v1.9.0 -> versao do pacote" "$PKGT/install.sh" --yes
+check "VERSION atualizada" cmp -s "$PKG/grub-theme/VERSION" "$LT/VERSION"
+check "theme.txt substituido pelo do pacote" bash -c "! grep -q '^# antigo' '$LT/theme.txt'"
+check "wallpaper ativo preservado na atualizacao" test "$bg_before" = "$(sha256sum < "$LT/background.png")"
+check "sem diretorios temporarios em themes/" bash -c "! ls -A '$L/boot/grub/themes' | grep -q '^\.'"
+echo 9.0.0 > "$LT/VERSION"
+out="$("$PKGT/install.sh" --yes 2>&1)"
+check "sem downgrade do tema" grep -q 'mais novo que o do pacote' <<< "$out"
+cp "$PKG/grub-theme/VERSION" "$LT/VERSION"
+
+section "Instalador: instalacao limpa (--fresh)"
+"$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/backgrounds.conf"
+echo 'gothic/background1.png' > "$LD/state/last-background"
+echo '# personalizado' >> "$LT/theme.txt"
+touch "$T/systemctl.enabled"
+grub_before="$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
+expect_rc 1 "--fresh com --uninstall e recusado" "$PKGT/install.sh" --fresh --uninstall --yes
+if command -v script >/dev/null; then
+    snap="$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+    printf 'n\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --bundles all --no-components" /dev/null >/dev/null 2>&1
+    check "--fresh cancelado na confirmacao nao altera nada" test "$snap" = "$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+fi
+out="$("$PKGT/install.sh" --fresh --yes --no-keep-config 2>&1)"; rc=$?
+check "--fresh --yes --no-keep-config (rc=0)" test "$rc" = 0
+check "avisa que o bundle fora do pacote sera perdido" grep -q 'serao perdidos: noname' <<< "$out"
+check "bundles = exatamente os do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
+check "configuracao recriada com os padroes (MODE=global)" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
+check "estado anterior apagado" test ! -e "$LD/state/last-background"
+check "theme.txt igual ao do pacote (personalizacao descartada)" bash -c "! grep -q '^# personalizado' '$LT/theme.txt'"
+check "componentes reinstalados" bash -c "[[ -x '$L/usr/bin/kawaii-arch-manager' && -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
+check "servico nao volta habilitado sem --enable-service" test ! -e "$T/systemctl.enabled"
+check "/etc/default/grub e grub.cfg preservados" test "$grub_before" = "$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
+check "sem diretorios temporarios restantes" bash -c "! ls -A '$LD/bundles' '$L/boot/grub/themes' | grep -q '^\.'"
+expect_rc 0 "--fresh --yes --enable-service" "$PKGT/install.sh" --fresh --yes --enable-service
+check "servico habilitado com --enable-service" test -e "$T/systemctl.enabled"
+
+section "Instalador: --fresh mantendo a configuracao de wallpapers"
+expect_rc 1 "--keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --keep-config
+expect_rc 1 "--no-keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --no-keep-config
+# modo set apontando para um bundle importado (fora do pacote)
+"$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/backgrounds.conf"
+echo 'noname/background1.png' > "$LD/state/last-background"
+cp "$LD/bundles/noname/backgrounds/background1.png" "$LT/background.png"
+conf_before="$(sha256sum < "$LD/config/backgrounds.conf")"
+bg_before="$(sha256sum < "$LT/background.png")"
+nn_before="$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
+check "--fresh --yes mantem a configuracao por padrao (rc=0)" test "$rc" = 0
+check "backgrounds.conf identico ao anterior" test "$conf_before" = "$(sha256sum < "$LD/config/backgrounds.conf")"
+check "estado da rotacao mantido" grep -qx 'noname/background1.png' "$LD/state/last-background"
+check "bundle importado usado pela configuracao foi mantido" test "$nn_before" = "$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+check "bundle mantido nao e anunciado como perdido" bash -c "! grep -q 'serao perdidos' <<< \"\$1\"" _ "$out"
+check "wallpaper ativo mantido" test "$bg_before" = "$(sha256sum < "$LT/background.png")"
+check "paths.conf regenerado" grep -q '^THEME_DIR="/boot/grub/themes/kawaii-arch-theme"' "$LD/config/paths.conf"
+check "guarda temporaria removida" bash -c "! ls -A '$L/var/lib' | grep -q '^\.kawaii'"
+check "helper funciona com a configuracao mantida" env KAWAII_ROOT="$L" "$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh" --dry-run --quiet >/dev/null
+# modo fixed num bundle do pacote que o usuario nao seleciona na reinstalacao
+fx_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | head -n1)"
+other_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | tail -n1)"
+fx_img="$(cd "$PKGT/bundles/$fx_id/backgrounds" && ls *.png | sort | tail -n1)"
+printf 'MODE="fixed"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND="%s/%s"\n' "$fx_id" "$fx_img" > "$LD/config/backgrounds.conf"
+cp "$PKGT/bundles/$other_id/backgrounds/$(cd "$PKGT/bundles/$other_id/backgrounds" && ls *.png | head -n1)" "$LT/background.png"
+out="$("$PKGT/install.sh" --fresh --yes --keep-config --no-components --bundles "$other_id" 2>&1)"; rc=$?
+check "--fresh --keep-config --bundles $other_id (rc=0)" test "$rc" = 0
+check "bundle do wallpaper fixo incluido automaticamente" bash -c "[[ -d '$LD/bundles/$fx_id' && -d '$LD/bundles/$other_id' ]]"
+check "inclusao automatica e informada" grep -q "Bundle '$fx_id' incluido" <<< "$out"
+check "wallpaper ativo = wallpaper fixo configurado" cmp -s "$PKGT/bundles/$fx_id/backgrounds/$fx_img" "$LT/background.png"
+check "modo fixed mantido" grep -qx "SELECTED_BACKGROUND=\"$fx_id/$fx_img\"" "$LD/config/backgrounds.conf"
+check "bundle importado nao referenciado foi apagado" test ! -e "$LD/bundles/noname"
+if command -v script >/dev/null; then
+    out="$(printf 'n\ns\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --bundles all --no-components" /dev/null 2>&1)"
+    check "pergunta sobre manter a configuracao no --fresh interativo" grep -q 'Manter a configuracao de wallpapers' <<< "$out"
+    check "respondendo 'n', a configuracao volta ao padrao" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
+    out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --bundles all --no-components" /dev/null 2>&1)"
+    check "reinstalacao normal (sem --fresh) nao faz a pergunta" bash -c "! grep -q 'Manter a configuracao' <<< \"\$1\"" _ "$out"
+fi
+
+expect_rc 0 "--uninstall --yes" "$PKGT/install.sh" --uninstall --yes
+check "tema e componentes removidos, dados preservados" bash -c "[[ ! -e '$LT' && -d '$LD/bundles' && ! -e '$L/usr/bin/kawaii-arch-manager' && ! -e '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
+check "servico desabilitado na remocao" test ! -e "$T/systemctl.enabled"
+
+section "Instalador: dependencia servico -> helper"
+S="$T/svc-root"; mkdir -p "$S/boot/grub"
+export KAWAII_ROOT="$S"
+expect_rc 0 "--without-helper --with-service --without-manager" "$PKGT/install.sh" --yes --without-helper --with-service --without-manager
+check "servico nao instalado sem o helper" test ! -e "$S/usr/lib/systemd/system/grub-random-bg.service"
+check "/boot contem so um wallpaper ativo + fallback" bash -c "[[ \$(find '$S/boot' -name '*.png' -path '*kawaii*' ! -path '*/icons/*' | grep -v -e arch-logo -e select_ -e terminal_box -e boot_menu_box -e progress_ | wc -l) == 2 ]]"
+expect_rc 0 "--with-helper --with-service sem --enable-service" "$PKGT/install.sh" --yes --with-helper --with-service --without-manager
+check "servico instalado mas nao habilitado" bash -c "[[ -f '$S/usr/lib/systemd/system/grub-random-bg.service' && ! -e '$T/systemctl.enabled' ]]"
+unset KAWAII_ROOT
+
+section "Instalador: selecao de bundles"
+bundle_dirs() { [[ -d "$1" ]] && (cd "$1" && ls -d */ 2>/dev/null | tr -d / | sort | tr '\n' ' '); }
+K="$T/sel-none"; mkdir -p "$K/boot/grub"
+export KAWAII_ROOT="$K"
+expect_rc 0 "--no-bundles" "$PKGT/install.sh" --yes --no-components --no-bundles
+check "nenhum bundle instalado" test -z "$(bundle_dirs "$K/var/lib/kawaii-arch-manager/bundles")"
+check "background.png = wallpaper padrao do pacote" cmp -s "$PKG/grub-theme/background.png" "$K/boot/grub/themes/kawaii-arch-theme/background.png"
+K="$T/sel-list"; mkdir -p "$K/boot/grub"
+export KAWAII_ROOT="$K"
+mkdir -p "$T/sel-src"
+first="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | head -n1)"
+last="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | tail -n1)"
+expect_rc 0 "--bundles $last,1 (ID e numero)" "$PKGT/install.sh" --yes --no-components --bundles "$last,1"
+check "somente os bundles escolhidos" test "$(bundle_dirs "$K/var/lib/kawaii-arch-manager/bundles")" = "$(printf '%s\n' "$first" "$last" | sort -u | tr '\n' ' ')"
+check "background.png veio de um bundle escolhido" bash -c "for f in '$K'/var/lib/kawaii-arch-manager/bundles/*/backgrounds/*.png; do cmp -s \"\$f\" '$K/boot/grub/themes/kawaii-arch-theme/background.png' && exit 0; done; exit 1"
+for id in $(bundle_dirs "$K/var/lib/kawaii-arch-manager/bundles"); do
+    check "bundle $id instalado igual ao do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles/$id/backgrounds' && ls *.png)\" == \"\$(cd '$K/var/lib/kawaii-arch-manager/bundles/$id/backgrounds' && ls *.png)\" ]] && cmp -s '$PKGT/bundles/$id/manifest.conf' '$K/var/lib/kawaii-arch-manager/bundles/$id/manifest.conf'"
+done
+K="$T/sel-bad"; mkdir -p "$K/boot/grub"
+export KAWAII_ROOT="$K"
+expect_rc 1 "--bundles com ID inexistente e recusado" "$PKGT/install.sh" --yes --no-components --bundles nao-existe
+check "nada instalado apos a recusa" test ! -e "$K/boot/grub/themes/kawaii-arch-theme"
+
+section "Instalador: pacote sem bundles"
+P2="$T/pkg-nobundles"; mkdir -p "$P2/bundles/quebrado/backgrounds"
+cp -r "$PKGT/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$P2/"
+printf 'ID="outro"\nVERSION="1.0.0"\n' > "$P2/bundles/quebrado/manifest.conf"
+mkpng "$P2/bundles/quebrado/backgrounds/background1.png"
+K="$T/nobundles-root"; mkdir -p "$K/boot/grub"
+export KAWAII_ROOT="$K"
+out="$("$P2/install.sh" --yes --no-components 2>&1)"; rc=$?
+check "instalacao segue sem bundles (rc=0)" test "$rc" = 0
+check "bundle invalido do pacote e ignorado com aviso" grep -q 'bundles/quebrado ignorado' <<< "$out"
+check "nenhum bundle instalado" test -z "$(bundle_dirs "$K/var/lib/kawaii-arch-manager/bundles")"
+check "background.png = wallpaper padrao do pacote" cmp -s "$P2/grub-theme/background.png" "$K/boot/grub/themes/kawaii-arch-theme/background.png"
+unset KAWAII_ROOT
+
+printf '\n\e[1mResultado: %d ok, %d falha(s)\e[0m\n' "$PASS" "$FAIL"
+((KEEP)) && echo "sandbox mantida em $T"
+((FAIL == 0))

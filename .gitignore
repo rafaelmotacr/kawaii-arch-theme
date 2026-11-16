@@ -1,0 +1,25 @@
+# Documentos internos (especificação original; o contexto está em AGENTS.md)
+kawaii-arch-theme-specification.md
+
+# Bundles de wallpapers: ficam só na máquina local (direitos de terceiros).
+# O instalador usa o que estiver em bundles/<id>/; só o README é versionado.
+bundles/*
+!bundles/README.md
+
+# Pacotes gerados / snapshots
+*.kawall
+*.zip
+
+# Build do manager
+manager/build/
+manager/out/
+*.o
+
+# Python, editores e sistema
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
