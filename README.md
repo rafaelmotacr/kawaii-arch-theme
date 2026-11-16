@@ -6,6 +6,10 @@ Tema GRUB minimalista para Arch Linux, derivado do
 O gerenciamento é feito por um programa de linha de comando compilado, o
 **Kawaii Arch Manager**.
 
+O repositório traz só o wallpaper padrão. Os bundles são montados por você,
+com imagens que você tenha direito de usar (ver
+[Bundles de wallpapers](#bundles-de-wallpapers)).
+
 <!-- Captura de tela: adicione docs/screenshot.png e descomente a linha abaixo. -->
 <!-- ![Kawaii Arch Theme](docs/screenshot.png) -->
 
@@ -26,7 +30,7 @@ O gerenciamento é feito por um programa de linha de comando compilado, o
 | Kawaii Arch Manager (C, binário nativo) | 1.1.0 | `/usr/bin/kawaii-arch-manager` | não |
 | Background Helper (bash) | 2.0.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
-| Bundles de wallpapers | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
+| Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
 
 Cada componente tem sua própria versão (SemVer) e é atualizado de forma
 independente, sem downgrade automático.
@@ -39,11 +43,13 @@ independente, sem downgrade automático.
 - Para compilar o manager: `gcc`, `make` e `libarchive`. No Arch:
   `pacman -S --needed base-devel libarchive`. Sem eles, o instalador avisa e
   continua com o tema e os demais componentes.
+- Só para desenvolvimento: `python3` (testes) e Python 3 com Pillow e NumPy
+  (`tools/make_glass.py`).
 
 ## Instalação rápida
 
 ```bash
-git clone <url-do-repositório> kawaii-arch-theme
+git clone https://github.com/rafaelmotacr/kawaii-arch-theme.git
 cd kawaii-arch-theme
 # opcional: coloque seus bundles em bundles/<id>/ (ver bundles/README.md)
 sudo ./install.sh
@@ -52,19 +58,20 @@ sudo ./install.sh
 O instalador faz todas as perguntas antes de alterar qualquer coisa. Para
 aceitar os padrões sem perguntas: `sudo ./install.sh --yes`.
 
-O repositório não traz bundles de wallpapers. Sem bundles, o tema usa o
-wallpaper padrão (`grub-theme/background.png`). Veja como
-[adicionar bundles](#bundles-de-wallpapers).
+Num clone novo, a pasta `bundles/` só tem um README. Sem bundles, o tema usa
+o wallpaper padrão (`grub-theme/background.png`), e a troca automática não
+tem o que sortear até você
+[adicionar bundles](#bundles-de-wallpapers), na instalação ou depois.
 
 ## Instalador (`install.sh`)
 
 ```bash
 sudo ./install.sh                        # interativo
 sudo ./install.sh --yes                  # padrões: instala os 3 componentes e
-                                         # todos os bundles de bundles/; o serviço
-                                         # só é habilitado se já estava habilitado
-                                         # ou com --enable-service
-sudo ./install.sh --bundles gothic,red   # só esses bundles de bundles/
+                                         # todos os bundles da pasta bundles/; o
+                                         # serviço só é habilitado se já estava
+                                         # habilitado ou com --enable-service
+sudo ./install.sh --bundles meu-bundle,2 # só esses bundles da pasta bundles/
 sudo ./install.sh --no-bundles           # nenhum bundle: wallpaper padrão
 sudo ./install.sh --fresh                # instalação limpa (ver abaixo)
 sudo ./install.sh --uninstall [--purge]  # remoção (ver abaixo)
@@ -80,7 +87,7 @@ Opções:
 | `--with-service` / `--without-service` | instala ou recusa o serviço (exige o helper) |
 | `--no-components` | recusa os três componentes opcionais |
 | `--enable-service` | habilita o serviço (consentimento explícito) |
-| `--bundles all\|none\|ID,...` | bundles de `bundles/` a instalar (aceita IDs ou números) |
+| `--bundles all\|none\|ID,...` | bundles da pasta local `bundles/` a instalar (aceita IDs ou os números da lista) |
 | `--no-bundles` | o mesmo que `--bundles none` |
 | `--logo` / `--no-logo` | exibe ou oculta o logo do Arch abaixo do menu |
 | `--grub-dir DIR` | diretório do GRUB (padrão: detectado) |
@@ -107,16 +114,18 @@ Quando altera `/etc/default/grub`, o instalador salva um backup em
 
 ### Instalação limpa (`--fresh`)
 
-Apaga tudo o que foi instalado e reinstala a partir do pacote, como numa
-máquina nova: tema (inclusive o wallpaper ativo e qualquer alteração no
+Apaga tudo o que foi instalado e reinstala a partir da pasta do projeto, como
+numa máquina nova: tema (inclusive o wallpaper ativo e qualquer alteração no
 `theme.txt`), manager e payload, helper, unidade systemd e
 `/var/lib/kawaii-arch-manager` (bundles, `backgrounds.conf` e estado). A
 exceção é a configuração de wallpapers, se você escolher mantê-la.
 
 - Todas as perguntas e a confirmação vêm **antes** de apagar qualquer coisa.
   O instalador lista o que será removido e aponta os bundles instalados que
-  não estão em `bundles/` (por exemplo, importados com `--import-bundle`),
-  porque eles serão perdidos. A confirmação é `[s/N]`; com `--yes`, o próprio
+  não estão na pasta local `bundles/` (por exemplo, os importados com
+  `--import-bundle`), porque eles serão perdidos. Para mantê-los, copie as
+  pastas deles de `/var/lib/kawaii-arch-manager/bundles/` para `bundles/`
+  antes de rodar o `--fresh`. A confirmação é `[s/N]`; com `--yes`, o próprio
   `--fresh` vale como confirmação.
 - **Manter a configuração de wallpapers.** Se existir um `backgrounds.conf`,
   o instalador mostra o modo atual e pergunta se ele deve ser mantido
@@ -125,9 +134,9 @@ exceção é a configuração de wallpapers, se você escolher mantê-la.
     e `state/last-background` voltam intactos; `paths.conf` é regenerado;
   - o wallpaper ativo continua o mesmo; no modo `fixed`, é o wallpaper fixo
     escolhido;
-  - se a configuração usa um bundle de `bundles/` que não foi selecionado,
-    ele é incluído automaticamente; se usa um bundle importado, esse bundle
-    é preservado.
+  - se a configuração usa um bundle da pasta `bundles/` que não foi
+    selecionado, ele é incluído automaticamente; se usa um bundle importado,
+    esse bundle é preservado.
 
   `--keep-config` e `--no-keep-config` decidem sem perguntar. Se o
   instalador falhar no meio, ele informa onde guardou a configuração.
@@ -149,7 +158,9 @@ regenerar o `grub.cfg`.
 
 ## Bundles de wallpapers
 
-Um bundle é uma coleção de wallpapers com um manifesto:
+O repositório não inclui bundles: monte os seus com imagens que você tenha
+direito de usar (ver [`THIRD_PARTY.md`](THIRD_PARTY.md)). Um bundle é uma
+coleção de wallpapers com um manifesto:
 
 ```text
 meu-bundle/
@@ -169,8 +180,9 @@ meu-bundle/
 
 Há três formas de adicionar bundles:
 
-1. **Na instalação:** coloque as pastas em `bundles/<id>/` (o nome da pasta
-   precisa ser igual ao `ID`) e rode o `install.sh`. Ele lista os bundles e
+1. **Na instalação:** coloque as pastas em `bundles/<id>/`, dentro do clone
+   (o nome da pasta precisa ser igual ao `ID`; o git ignora essa pasta), e
+   rode o `install.sh`. Ele lista os bundles e
    pergunta quais instalar (Enter = todos, `n` = nenhum, ou números/IDs).
    Bundles já instalados com versão igual ou maior são preservados.
 2. **Pacote `.kawall`:** `sudo kawaii-arch-manager --import-bundle arquivo.kawall`.
@@ -180,8 +192,9 @@ Há três formas de adicionar bundles:
    conter um único bundle num subdiretório, como fica depois de
    `tar -xf meu-bundle.kawall`.
 
-Use apenas imagens que você tenha direito de usar (ver
-[`THIRD_PARTY.md`](THIRD_PARTY.md)).
+Depois de adicionar bundles, escolha o modo com
+`sudo kawaii-arch-manager --set-mode ...` (o padrão é `global`) e, se quiser
+um wallpaper novo já no próximo boot, rode `sudo kawaii-arch-manager --randomize`.
 
 ### Formato `.kawall` e segurança da importação
 
@@ -253,7 +266,7 @@ A configuração fica em `/var/lib/kawaii-arch-manager/config/backgrounds.conf`:
 
 ```ini
 MODE="set"
-SELECTED_BUNDLE="gothic"
+SELECTED_BUNDLE="meu-bundle"
 SELECTED_BACKGROUND=""        # ID/arquivo.png, usado no modo fixed
 ```
 
@@ -298,8 +311,8 @@ Logs: `journalctl -u grub-random-bg.service`.
 ## Visual
 
 O tema mantém o layout minimalista do KawaiiGRUB: só o menu de boot (ícone +
-nome de cada sistema), o logo do Arch (opcional) e a barra de tempo. Sobre
-essa base:
+nome de cada sistema), o logo do Arch (opcional) e a barra de tempo (uma
+faixa branca, sem fundo, que cresce na base da tela). Sobre essa base:
 
 - **Caixa do terminal** (mensagens de carregamento e console,
   `terminal_box_*.png`): vidro escuro neutro com 72% de opacidade e contorno
@@ -321,7 +334,8 @@ Para ajustar o vidro (por exemplo, a opacidade), use
 | Sintoma | O que verificar |
 |---|---|
 | O tema não aparece | `GRUB_THEME` em `/etc/default/grub` aponta para `.../kawaii-arch-theme/theme.txt`; `GRUB_TERMINAL_OUTPUT=console` impede o tema (o instalador oferece comentar a linha); rode `sudo grub-mkconfig -o /boot/grub/grub.cfg` |
-| O wallpaper não troca a cada boot | `kawaii-arch-manager --status`; o serviço precisa estar instalado **e** habilitado; veja `journalctl -u grub-random-bg.service` |
+| A instalação não lista nenhum bundle | num clone novo, `bundles/` está vazia; coloque bundles ali ou importe-os depois com `--import-bundle` |
+| O wallpaper não troca a cada boot | é preciso ter bundles instalados (`kawaii-arch-manager --list-bundles`) e o serviço instalado **e** habilitado (`--status`); veja `journalctl -u grub-random-bg.service` |
 | Erro 5 / "partição não montada" | o tema está numa partição que não estava montada; confira `EXPECTED_MOUNT` em `/var/lib/kawaii-arch-manager/config/paths.conf` |
 | Nome de entrada cortado no menu | aumente `width` do `boot_menu` no `theme.txt`, mantendo os +32 px do contorno |
 | Texto do terminal difícil de ler | regenere a caixa com mais opacidade: `python3 tools/make_glass.py --opacity 0.8` |
@@ -335,8 +349,8 @@ Para ajustar o vidro (por exemplo, a opacidade), use
 install.sh                      instalador (bootstrap): tema + componentes opcionais
 grub-theme/                     arquivos do tema (theme.txt, fontes, ícones,
                                 molduras, background.png padrão, fallback.png, VERSION)
-bundles/                        bundles locais para o instalador (não versionados;
-                                ver bundles/README.md)
+bundles/                        bundles locais para o instalador (ignorados pelo git,
+                                exceto bundles/README.md)
 helper/grub-random-bg.sh        Background Helper
 systemd/grub-random-bg.service.in   modelo da unidade (@THEME_DIR@)
 manager/                        código-fonte C + Makefile do manager
@@ -355,8 +369,8 @@ tests/run-tests.sh [--keep]
 
 Os testes compilam o manager e rodam o helper, o manager e o instalador numa
 sandbox (`KAWAII_ROOT`), com um `systemctl` e um `grub-mkconfig` falsos. Os
-bundles são gerados pelos próprios testes. Não exigem root nem alteram o
-sistema. Cobrem:
+bundles são gerados pelos próprios testes, então funcionam num clone sem
+bundles. Não exigem root nem alteram o sistema. Cobrem:
 - importação de `.kawall` e de pastas, atualização e downgrade de bundles;
 - pacotes e pastas maliciosos (path traversal, links, arquivos especiais,
   limites);
@@ -372,8 +386,8 @@ sistema. Cobrem:
 - **`tools/make-kawall.sh PASTA [SAIDA.kawall]`** empacota a pasta de um
   bundle num `.kawall` determinístico (dono root, permissões 0644/0755, zstd
   ou gzip).
-- **`tools/make_glass.py`** (script extra, **não versionado** como os
-  componentes) gera `terminal_box_*.png` e `boot_menu_box_*.png` em
+- **`tools/make_glass.py`** (script extra, **sem versão própria**, ao
+  contrário dos componentes) gera `terminal_box_*.png` e `boot_menu_box_*.png` em
   `grub-theme/`. Requer Python 3 com Pillow e NumPy.
 
   ```sh
@@ -431,4 +445,5 @@ deriva.
 - Fontes Public Sans e Terminus: SIL OFL 1.1 (ver `licenses/`).
 - Wallpaper padrão: rafaelmotacr.
 
-Detalhes, marcas e pendências estão em [`THIRD_PARTY.md`](THIRD_PARTY.md).
+Origem e licença de cada parte, marcas e o uso de wallpapers estão em
+[`THIRD_PARTY.md`](THIRD_PARTY.md).
