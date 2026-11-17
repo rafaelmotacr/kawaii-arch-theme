@@ -32,6 +32,10 @@ static void usage(FILE *f)
 "  --set-background ID/ARQUIVO   define e aplica um wallpaper fixo (modo fixed)\n"
 "  --randomize                   seleciona e aplica um wallpaper agora\n"
 "\n"
+"Visual do tema (root; vale a partir do proximo boot):\n"
+"  --logo on|off                 exibe/oculta o logo da distribuicao\n"
+"  --menu-box on|off             exibe/oculta o contorno de vidro do menu\n"
+"\n"
 "Componentes (root):\n"
 "  --update                      atualiza helper, servico e bundles instalados\n"
 "                                a partir do payload local (sem downgrade)\n"
@@ -48,7 +52,8 @@ static void usage(FILE *f)
 "Opcoes:\n"
 "  -y, --yes                     responde 'sim' as confirmacoes\n"
 "      --force                   permite reinstalar a mesma versao ou downgrade\n"
-"  -n, --dry-run                 apenas valida/simula (import, randomize, update)\n"
+"  -n, --dry-run                 apenas valida/simula (import, randomize, update,\n"
+"                                logo, menu-box)\n"
 "  -h, --help                    esta ajuda\n"
 "\n"
 "Codigos de saida: 0 sucesso, 1 falha operacional, 2 argumento invalido,\n"
@@ -60,7 +65,7 @@ static void usage(FILE *f)
 enum cmd {
     C_NONE = 0, C_VERSION, C_STATUS, C_LIST, C_LIST_AVAIL, C_IMPORT, C_REMOVE, C_SET_BUNDLE,
     C_SET_MODE, C_SET_BG, C_RANDOMIZE, C_UPDATE, C_INST_HELPER, C_INST_SERVICE, C_ENABLE,
-    C_DISABLE, C_START, C_STOP, C_UNINSTALL, C_TONE, C_HELP
+    C_DISABLE, C_START, C_STOP, C_UNINSTALL, C_TONE, C_LOGO, C_MENU_BOX, C_HELP
 };
 
 int main(int argc, char **argv)
@@ -86,6 +91,8 @@ int main(int argc, char **argv)
         {"stop-service", no_argument, 0, C_STOP},
         {"uninstall", required_argument, 0, C_UNINSTALL},
         {"tone", required_argument, 0, C_TONE},
+        {"logo", required_argument, 0, C_LOGO},
+        {"menu-box", required_argument, 0, C_MENU_BOX},
         {"help", no_argument, 0, C_HELP},
         {"yes", no_argument, 0, 'y'},
         {"force", no_argument, 0, 'f'},
@@ -159,6 +166,8 @@ int main(int argc, char **argv)
     case C_START: return cmd_start_service();
     case C_STOP: return cmd_stop_service();
     case C_UNINSTALL: return cmd_uninstall(arg);
+    case C_LOGO: return cmd_set_logo(arg);
+    case C_MENU_BOX: return cmd_set_menu_box(arg);
     default: return KAM_EUSAGE;
     }
 }

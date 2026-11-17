@@ -217,6 +217,9 @@ int cmd_status(void)
                : tone && !strcmp(tone, "dark") ? "dark (wallpaper escuro: texto e icones claros)"
                                                 : "-");
         free(tone);
+        int lg = theme_element_state("logo"), mb = theme_element_state("menu-box");
+        printf("  %-22s %s\n", "Logo", lg == 1 ? "ligado" : lg == 0 ? "desligado" : "-");
+        printf("  %-22s %s\n", "Contorno do menu", mb == 1 ? "ligado" : mb == 0 ? "desligado" : "-");
         pathf(p, sizeof p, "%s/%s", P.theme_dir, FALLBACK_NAME);
         printf("  %-22s %s\n", "Fallback", png_check_file(p, NULL, e, sizeof e) == 0 ? "presente" : "ausente");
         char merr[512];

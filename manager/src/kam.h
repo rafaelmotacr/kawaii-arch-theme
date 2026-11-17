@@ -134,6 +134,11 @@ struct png_info { unsigned w, h; int depth, color; };
 int png_check_buf(const unsigned char *b, size_t n, struct png_info *pi, char *err, size_t errsz);
 int png_check_file(const char *path, struct png_info *pi, char *err, size_t errsz);
 
+/* layout.c */
+int theme_element_state(const char *which); /* "logo" | "menu-box": 1, 0, -1 */
+int cmd_set_logo(const char *arg);
+int cmd_set_menu_box(const char *arg);
+
 /* tone.c */
 int png_tone(const char *path, const char **tone, double *score_out, char *err, size_t errsz);
 int cmd_tone(const char *path);

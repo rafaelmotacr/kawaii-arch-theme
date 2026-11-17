@@ -42,6 +42,8 @@
 #                           rotacao e o wallpaper ativo (padrao: pergunta;
 #                           com --yes, mantem)
 #    --logo | --no-logo     exibe/oculta o logo da distribuicao abaixo do menu
+#    --menu-box | --no-menu-box
+#                           exibe/oculta o contorno de vidro do menu de boot
 #    --grub-dir DIR         diretorio do GRUB (padrao: detectado)
 #    -h, --help
 # =====================================================================
@@ -77,8 +79,6 @@ DEFAULT_GRUB="$ROOT/etc/default/grub"
 if [[ -n "$ROOT" ]]; then SYSTEMCTL="${KAWAII_SYSTEMCTL:-}"; else SYSTEMCTL="systemctl"; fi
 
 LOGO_FILE="logos/arch-dark.png"   # logo padrao (o seletor de tom troca o arquivo)
-LOGO_BEGIN='^# >>> logo'
-LOGO_END='^# <<< logo'
 ID_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
 IMG_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,250}\.png$'
 
@@ -89,6 +89,7 @@ OPT_HELPER=""
 OPT_SERVICE=""
 OPT_ENABLE=0
 OPT_LOGO=""
+OPT_MENU=""         # contorno do menu: "" pergunta | on | off
 OPT_GRUB_DIR=""
 OPT_PURGE=0
 OPT_BUNDLES=""      # "" pergunta | all | none | id1,id2
@@ -99,6 +100,7 @@ OPT_KEEP_CONFIG=""  # --fresh: "" pergunta | 1 mantem | 0 descarta a config de w
 GRUB_DEFAULT_CHANGED=0
 NEED_DAEMON_RELOAD=0
 OLD_LOGO_STATE=""     # estado do logo no tema instalado: on | off | ""
+OLD_MENU_STATE=""     # estado do contorno do menu no tema instalado
 declare -A RESULT=()
 PKG_BUNDLES=()        # IDs validos encontrados em bundles/ do pacote
 declare -A PKG_NAME=() PKG_VER=() PKG_COUNT=()
@@ -290,10 +292,31 @@ theme_version() {   # versao do tema instalado ("" se ausente)
     semver_valid "$v" && echo "$v" || echo "0.0.0"
 }
 
+# Blocos opcionais do theme.txt: linhas entre "# >>> NOME" e "# <<< NOME".
+# Um bloco desativado tem todas as linhas com o prefixo "#[TAG] ".
+block_has() {       # block_has ARQUIVO NOME -> 0 se os marcadores existem
+    grep -q "^[[:space:]]*# >>> $2\$" "$1" 2>/dev/null && grep -q "^[[:space:]]*# <<< $2\$" "$1"
+}
+block_active() {    # block_active ARQUIVO NOME -> 0 se ha linha nao comentada
+    sed -n "/^[[:space:]]*# >>> $2\$/,/^[[:space:]]*# <<< $2\$/p" "$1" | grep -qv '^[[:space:]]*\(#\|$\)'
+}
+block_set() {       # block_set ARQUIVO NOME TAG on|off
+    local f="$1" b="^[[:space:]]*# >>> $2\$" e="^[[:space:]]*# <<< $2\$" tag="$3"
+    if [[ "$4" == on ]]; then
+        sed -i "/$b/,/$e/s/^#\[$tag\] //" "$f"
+    else
+        sed -i "/$b/,/$e/{/$b/b;/$e/b;/^#\[$tag\] /b;s/^/#[$tag] /}" "$f"
+    fi
+}
+
 logo_state() {      # on | off | "" para um theme.txt
-    local f="$1"
-    grep -q "$LOGO_BEGIN" "$f" 2>/dev/null || { echo ""; return; }
-    if sed -n "/$LOGO_BEGIN/,/$LOGO_END/p" "$f" | grep -q '^+ image'; then echo on; else echo off; fi
+    block_has "$1" logo || { echo ""; return; }
+    if block_active "$1" logo; then echo on; else echo off; fi
+}
+
+menu_state() {      # contorno do menu: on | off | ""
+    block_has "$1" menu-box && block_has "$1" no-menu-box || { echo ""; return; }
+    if block_active "$1" menu-box; then echo on; else echo off; fi
 }
 
 manager_version() {
@@ -311,6 +334,7 @@ detect_state() {
     if [[ -n "$tv" ]]; then
         note "Tema:               v$tv em $THEME_RAW"
         OLD_LOGO_STATE="$(logo_state "$THEME_FILE")"
+        OLD_MENU_STATE="$(menu_state "$THEME_FILE")"
     else
         note "Tema:               nao instalado"
     fi
@@ -360,7 +384,7 @@ preflight() {
 # ---------------------------------------------------------------------
 # Perguntas (todas antes de qualquer alteracao)
 # ---------------------------------------------------------------------
-WANT_MANAGER=skip; WANT_HELPER=skip; WANT_SERVICE=skip; WANT_ENABLE=0; WANT_LOGO=on
+WANT_MANAGER=skip; WANT_HELPER=skip; WANT_SERVICE=skip; WANT_ENABLE=0; WANT_LOGO=on; WANT_MENU=on
 
 decide() {   # decide OPT pergunta-instalar default -> echo install|skip
     local opt="$1" q="$2" def="$3"
@@ -373,6 +397,7 @@ plan() {
     if ((FRESH)); then
         plan_fresh
         OLD_LOGO_STATE=""   # instalacao limpa: padroes do pacote
+        OLD_MENU_STATE=""
     fi
 
     # Logo
@@ -381,6 +406,13 @@ plan() {
     if [[ -n "$OPT_LOGO" ]]; then WANT_LOGO="$OPT_LOGO"
     elif ask_yn "Exibir o logo da distribuicao (Arch Linux por padrao) abaixo do menu?" "$def"; then WANT_LOGO=on
     else WANT_LOGO=off
+    fi
+
+    # Contorno do menu de boot
+    def=S; [[ "$OLD_MENU_STATE" == off ]] && def=N
+    if [[ -n "$OPT_MENU" ]]; then WANT_MENU="$OPT_MENU"
+    elif ask_yn "Exibir o contorno de vidro em volta do menu de boot?" "$def"; then WANT_MENU=on
+    else WANT_MENU=off
     fi
 
     plan_bundles
@@ -658,13 +690,23 @@ installed_bundles() {
 # ---------------------------------------------------------------------
 set_logo() {   # set_logo ARQUIVO on|off
     local f="$1" state="$2"
-    grep -q "$LOGO_BEGIN" "$f" && grep -q "$LOGO_END" "$f" || { warn "marcadores do logo ausentes no theme.txt"; return 0; }
+    block_has "$f" logo || { warn "marcadores do logo ausentes no theme.txt"; return 0; }
+    block_set "$f" logo logo "$state"
+    [[ "$(logo_state "$f")" == "$state" ]] || die "falha ao $( [[ "$state" == on ]] && echo ativar || echo desativar) o logo"
+}
+
+# Contorno do menu: o bloco menu-box (limites +16 px por lado e
+# menu_pixmap_style) e o no-menu-box (limites originais) se alternam.
+set_menu() {   # set_menu ARQUIVO on|off
+    local f="$1" state="$2" other=off
+    [[ "$state" == off ]] && other=on
+    [[ -n "$(menu_state "$f")" ]] || { warn "marcadores do contorno do menu ausentes no theme.txt"; return 0; }
+    block_set "$f" menu-box menu "$state"
+    block_set "$f" no-menu-box menu "$other"
     if [[ "$state" == on ]]; then
-        sed -i "/$LOGO_BEGIN/,/$LOGO_END/s/^#\[logo\] //" "$f"
-        [[ "$(logo_state "$f")" == on ]] || die "falha ao ativar o logo"
+        block_active "$f" menu-box && ! block_active "$f" no-menu-box || die "falha ao ativar o contorno do menu"
     else
-        sed -i "/$LOGO_BEGIN/,/$LOGO_END/{/$LOGO_BEGIN/b;/$LOGO_END/b;/^#\[logo\] /b;s/^/#[logo] /}" "$f"
-        [[ "$(logo_state "$f")" == off ]] || die "falha ao desativar o logo"
+        ! block_active "$f" menu-box && block_active "$f" no-menu-box || die "falha ao desativar o contorno do menu"
     fi
 }
 
@@ -702,10 +744,10 @@ install_theme() {
         c="$(semver_cmp "$inst_ver" "$src_ver")"
         if ((c > 0)); then
             info "Tema instalado (v$inst_ver) e mais novo que o do pacote (v$src_ver); nenhum downgrade sera feito"
-            apply_logo_in_place; ensure_active_background; return 0
+            apply_layout_in_place; ensure_active_background; return 0
         elif ((c == 0)); then
             info "Tema ja atualizado (v$inst_ver)"
-            apply_logo_in_place; ensure_active_background; return 0
+            apply_layout_in_place; ensure_active_background; return 0
         fi
         info "Atualizando o tema: v$inst_ver -> v$src_ver"
     else
@@ -719,6 +761,7 @@ install_theme() {
     rm -f "$new/background.png"
     chmod -R u=rwX,go=rX "$new"
     set_logo "$new/theme.txt" "$WANT_LOGO"
+    set_menu "$new/theme.txt" "$WANT_MENU"
     [[ "$WANT_LOGO" == off ]] || [[ -f "$new/$LOGO_FILE" ]] || die "logo ativado, mas $LOGO_FILE nao esta no tema"
 
     bg="$(initial_background "$THEME_DIR")"
@@ -750,13 +793,19 @@ install_theme() {
     note "Espaco ocupado em $(raw_path "$THEME_DIR"): $(du -sh "$THEME_DIR" | cut -f1)"
 }
 
-apply_logo_in_place() {
-    [[ "$(logo_state "$THEME_FILE")" == "$WANT_LOGO" ]] && return 0
+# Logo e contorno do menu num tema ja atualizado (escreve so se mudar)
+apply_layout_in_place() {
+    local logo menu
+    logo="$(logo_state "$THEME_FILE")"; menu="$(menu_state "$THEME_FILE")"
+    [[ ( -z "$logo" || "$logo" == "$WANT_LOGO" ) && ( -z "$menu" || "$menu" == "$WANT_MENU" ) ]] && return 0
     local tmp; tmp="$(mktemp "$THEME_DIR/.theme.txt.XXXXXX")"
     cp "$THEME_FILE" "$tmp"
-    set_logo "$tmp" "$WANT_LOGO"
+    [[ -n "$logo" && "$logo" != "$WANT_LOGO" ]] && set_logo "$tmp" "$WANT_LOGO"
+    [[ -n "$menu" && "$menu" != "$WANT_MENU" ]] && set_menu "$tmp" "$WANT_MENU"
     chmod 644 "$tmp"; mv -f "$tmp" "$THEME_FILE"
-    info "Logo $( [[ "$WANT_LOGO" == on ]] && echo ativado || echo desativado)"
+    [[ -n "$logo" && "$logo" != "$WANT_LOGO" ]] && info "Logo $( [[ "$WANT_LOGO" == on ]] && echo ativado || echo desativado)"
+    [[ -n "$menu" && "$menu" != "$WANT_MENU" ]] && info "Contorno do menu $( [[ "$WANT_MENU" == on ]] && echo ativado || echo desativado)"
+    return 0
 }
 
 ensure_active_background() {
@@ -1326,6 +1375,8 @@ while (($#)); do
         --no-keep-config)   OPT_KEEP_CONFIG=0 ;;
         --logo)            OPT_LOGO=on ;;
         --no-logo)          OPT_LOGO=off ;;
+        --menu-box)        OPT_MENU=on ;;
+        --no-menu-box)     OPT_MENU=off ;;
         --grub-dir)         shift; OPT_GRUB_DIR="${1:-}"; [[ -n "$OPT_GRUB_DIR" ]] || die "--grub-dir exige um diretorio" ;;
         -h|--help)          sed -n '2,/^# =====/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)                  die "opcao desconhecida: $1 (use --help)" ;;

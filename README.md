@@ -30,9 +30,9 @@ com imagens que você tenha direito de usar (ver
 
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
-| Tema GRUB | 3.0.0 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.2.0 | `/usr/bin/kawaii-arch-manager` | não |
-| Background Helper (bash) | 2.1.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
+| Tema GRUB | 3.1.0 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
+| Kawaii Arch Manager (C, binário nativo) | 1.3.0 | `/usr/bin/kawaii-arch-manager` | não |
+| Background Helper (bash) | 2.1.1 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
 
@@ -95,6 +95,7 @@ Opções:
 | `--bundles all\|none\|ID,...` | bundles da pasta local `bundles/` a instalar (aceita IDs ou os números da lista) |
 | `--no-bundles` | o mesmo que `--bundles none` |
 | `--logo` / `--no-logo` | exibe ou oculta o logo da distribuição abaixo do menu |
+| `--menu-box` / `--no-menu-box` | exibe ou oculta o contorno de vidro em volta do menu de boot |
 | `--grub-dir DIR` | diretório do GRUB (padrão: detectado) |
 | `--fresh` | instalação limpa |
 | `--keep-config` / `--no-keep-config` | só com `--fresh`: mantém ou descarta a configuração de wallpapers |
@@ -110,6 +111,8 @@ Rodar o instalador de novo é seguro, porque ele é idempotente:
 - a unidade systemd só é reescrita quando o conteúdo muda, e só nesse caso
   roda `daemon-reload`;
 - `backgrounds.conf` e os bundles instalados nunca são sobrescritos;
+- as escolhas de logo e de contorno do menu são mantidas (só o `--fresh`
+  volta aos padrões);
 - `grub-mkconfig` só roda quando `/etc/default/grub` foi alterado, ou quando
   o `grub.cfg` não referencia o tema ou suas fontes. Trocar de wallpaper
   nunca exige isso.
@@ -240,6 +243,8 @@ sudo kawaii-arch-manager --set-bundle ID
 sudo kawaii-arch-manager --set-mode fixed|set|global|balanced
 sudo kawaii-arch-manager --set-background ID/arquivo.png
 sudo kawaii-arch-manager --randomize            aplica agora (via helper, ou seleção interna)
+sudo kawaii-arch-manager --logo on|off          exibe ou oculta o logo da distribuição
+sudo kawaii-arch-manager --menu-box on|off      exibe ou oculta o contorno de vidro do menu
 sudo kawaii-arch-manager --update               helper, serviço e bundles a partir do payload local
 sudo kawaii-arch-manager --install-helper | --install-service
 sudo kawaii-arch-manager --enable-service | --disable-service | --start-service | --stop-service
@@ -248,7 +253,7 @@ sudo kawaii-arch-manager --uninstall service|helper|manager|data
 
 Opções globais: `--yes` (confirma automaticamente), `--force` (reinstala a
 mesma versão ou permite downgrade) e `--dry-run` (só valida ou simula; aceito
-por `--import-bundle`, `--randomize` e `--update`).
+por `--import-bundle`, `--randomize`, `--update`, `--logo` e `--menu-box`).
 
 Os comandos de consulta funcionam como usuário comum. Operações de escrita
 exigem root e mostram o comando com `sudo`; o manager nunca se eleva sozinho.
@@ -329,11 +334,25 @@ nome de cada sistema), o logo da distribuição (opcional) e a barra de tempo
   calibrada para manter o texto do GRUB legível até sobre áreas brancas. O
   GRUB não desfoca o fundo, então o efeito de vidro vem da transparência, do
   contorno e de um reflexo interno.
-- **Contorno do menu de boot** (`tones/<tom>/boot_menu_box_*.png`, via
-  `menu_pixmap_style`): o mesmo contorno, sem preenchimento. O GRUB desenha
-  essa moldura dentro dos limites do menu e reserva 16 px de cada lado. Por
-  isso os limites no `theme.txt` são a área das entradas expandida em 16 px
-  por lado.
+- **Contorno do menu de boot** (opcional, ligado por padrão;
+  `tones/<tom>/boot_menu_box_*.png`, via `menu_pixmap_style`): o mesmo
+  contorno, sem preenchimento. O GRUB desenha essa moldura dentro dos
+  limites do menu e reserva 16 px de cada lado. Por isso o `theme.txt` tem
+  dois blocos de limites, e só um fica ativo:
+  - `menu-box`: a área das entradas expandida em 16 px por lado, mais o
+    contorno;
+  - `no-menu-box`: a área das entradas (5%, 36%, 490 x 44%), sem contorno.
+
+  As entradas ficam no mesmo lugar nos dois casos. Para alternar, use
+  `--menu-box`/`--no-menu-box` no instalador ou
+  `sudo kawaii-arch-manager --menu-box on|off`.
+- **Logo** (opcional, ligado por padrão): `--logo`/`--no-logo` no
+  instalador ou `sudo kawaii-arch-manager --logo on|off`.
+
+Essas escolhas ficam no próprio `theme.txt`, em blocos marcados
+(`# >>> nome` ... `# <<< nome`; um bloco desligado tem as linhas com o
+prefixo `#[logo] ` ou `#[menu] `). O `--status` mostra o estado atual, e a
+mudança vale a partir do próximo boot.
 
 Para ajustar o vidro (por exemplo, a opacidade), use
 [`tools/make_glass.py`](#ferramentas).
@@ -390,7 +409,7 @@ nome é o `ID` do `os-release`. Depois suba a versão do tema.
 | A instalação não lista nenhum bundle | num clone novo, `bundles/` está vazia; coloque bundles ali ou importe-os depois com `--import-bundle` |
 | O wallpaper não troca a cada boot | é preciso ter bundles instalados (`kawaii-arch-manager --list-bundles`) e o serviço instalado **e** habilitado (`--status`); veja `journalctl -u grub-random-bg.service` |
 | Erro 5 / "partição não montada" | o tema está numa partição que não estava montada; confira `EXPECTED_MOUNT` em `/var/lib/kawaii-arch-manager/config/paths.conf` |
-| Nome de entrada cortado no menu | aumente `width` do `boot_menu` no `theme.txt`, mantendo os +32 px do contorno |
+| Nome de entrada cortado no menu | aumente `width` do `boot_menu` no `theme.txt` **nos dois blocos** (`menu-box` e `no-menu-box`), mantendo os +32 px do contorno no primeiro |
 | Texto do terminal difícil de ler | regenere a caixa com mais opacidade: `python3 tools/make_glass.py --opacity 0.8` (e `--tone light`) |
 | Texto/ícones claros num wallpaper claro | o tom é medido pelo manager: confira se ele está instalado e o tom em `--status`; veja o que ele mede com `kawaii-arch-manager --tone /boot/grub/themes/kawaii-arch-theme/background.png` e reaplique com `sudo /usr/lib/kawaii-arch-manager/grub-random-bg.sh --retone` |
 | Logo de outra distribuição não aparece | o arquivo precisa ser `logos/<ID>-dark.png` e `logos/<ID>-light.png`, com o `ID` (ou um `ID_LIKE`) do `/etc/os-release` |
@@ -435,6 +454,8 @@ bundles. Não exigem root nem alteram o sistema. Cobrem:
 - pacotes e pastas maliciosos (path traversal, links, arquivos especiais,
   limites);
 - os quatro modos e suas distribuições de probabilidade;
+- o logo e o contorno do menu (`--logo`, `--menu-box` e as opções do
+  instalador), incluindo os limites sem contorno e a preservação do estado;
 - a medição do tom (`--tone`) em todos os formatos de PNG aceitos e com PNGs
   inválidos, a troca de ícones, cores, bordas e logo, a retomada de uma
   cópia interrompida e a escolha do logo pelo `os-release`;
@@ -502,6 +523,7 @@ visuais novos compatíveis, major para mudanças incompatíveis. O
 | Versões independentes, sem downgrade | SemVer por componente; `--status` / `--update` |
 | Reinstalação preserva dados e configuração | testes de atualização, idempotência e `--keep-config` |
 | Troca de wallpaper sem `grub-mkconfig` | teste com `grub-mkconfig` falso |
+| Logo e contorno opcionais sem mudar o layout | blocos alternados no `theme.txt`; testes de ida e volta |
 | Tom ajustado sem quebrar o tema | só linhas gerenciadas do `theme.txt`, escrita atômica e só quando muda; sem o manager, tom `dark` |
 
 Observação: as fontes `.pf2` ficam na raiz do tema, porque o

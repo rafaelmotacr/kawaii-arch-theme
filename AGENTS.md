@@ -141,6 +141,30 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      sombra/brilho externo (`make_glass.py --tone light`). A seleção, a
      barra e os ícones `light` vêm de `tools/make_light_assets.py`.
    - Mudança de regra: antes o helper "nunca alterava o `theme.txt`".
+7. **Contorno do menu e logo pelo manager** (tema 3.1.0, manager 1.3.0,
+   helper 2.1.1). O contorno do menu passou a ser opcional (padrão ligado),
+   com `--menu-box`/`--no-menu-box` no instalador e
+   `kawaii-arch-manager --menu-box on|off`; o logo ganhou
+   `kawaii-arch-manager --logo on|off`.
+   - Referência de tamanho: os `select_*` são idênticos aos do KawaiiGRUB, e
+     as métricas das entradas não mudaram. Só os limites do `boot_menu`
+     mudaram:
+     - KawaiiGRUB: 7%, 41%, 40%, 65%;
+     - este tema antes do contorno: 5%, 36%, 490, 44%;
+     - com o contorno: +16 px por lado.
+     Sem o contorno, voltam os limites de antes do contorno, e as entradas
+     não se mexem.
+   - Mecanismo: dois blocos dentro do `boot_menu`, `menu-box` (limites +16
+     e `menu_pixmap_style`) e `no-menu-box` (limites originais). Só um fica
+     ativo; o outro tem as linhas com o prefixo `#[menu] ` na coluna 0. O
+     GRUB aceita comentários dentro de componentes (`read_object` em
+     `theme_loader.c`). O logo usa o mesmo esquema (`#[logo] `).
+   - Estado só no `theme.txt`. O instalador o lê (`menu_state`,
+     `logo_state`) e o mantém em reinstalações e atualizações; o `--fresh`
+     volta a ligado. As funções genéricas são `block_has`, `block_active` e
+     `block_set` no `install.sh` e `manager/src/layout.c` no manager.
+   - O helper atualiza o tom também nas linhas `#[menu] `, para o contorno
+     religar no tom certo.
 
 ## 4. Convenções
 
@@ -191,12 +215,17 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 3.0.0, manager 1.2.0, helper 2.1.0, unidade rev 2.
+Versões atuais: tema 3.1.0, manager 1.3.0, helper 2.1.1, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 
 - `menu_pixmap_style` e `terminal-box`: as molduras são desenhadas **dentro**
   da área declarada, e o padding é o tamanho dos tiles (16 px).
+- Os limites do `boot_menu` existem em dois blocos (`menu-box` com +16 px
+  por lado e `no-menu-box` sem): ao mudar posição ou tamanho, altere os
+  dois. O prefixo `#[menu] `/`#[logo] ` fica na coluna 0, antes da
+  indentação, e os marcadores `# >>> nome`/`# <<< nome` precisam ficar
+  sozinhos na linha.
 - As fontes `.pf2` precisam ficar na **raiz** do tema: o
   `/etc/grub.d/00_header` só carrega as de lá, e o `grub.cfg` gerado lista
   todas. Mudar o conjunto de fontes exige regenerar o `grub.cfg` (o

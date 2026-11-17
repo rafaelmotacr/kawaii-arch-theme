@@ -46,7 +46,7 @@ export LC_ALL=C
 
 # Versao do helper (SemVer). Lida como texto pelo instalador e pelo
 # manager (sem executar o script): mantenha o formato VERSION="x.y.z".
-VERSION="2.1.0"
+VERSION="2.1.1"
 
 readonly E_OK=0 E_FAIL=1 E_USAGE=2 E_CONFIG=3 E_BUSY=4 E_PERM=5
 
@@ -512,7 +512,9 @@ sync_icons() {
 
 # rewrite_theme: troca so os valores gerenciados do theme.txt e grava
 # (atomico) apenas se algo mudou. Linhas de comentario sao preservadas,
-# exceto o bloco do logo desativado pelo instalador ("#[logo] ").
+# exceto as de blocos desativados ("#[logo] " do logo e "#[menu] " do
+# contorno do menu), que tambem acompanham o tom para quando forem
+# reativados.
 rewrite_theme() {
     local tt="$THEME_DIR/theme.txt" tmp="$THEME_DIR/theme.txt.tmp" ic sic
     conf_get "$THEME_DIR/tones/$TONE/colors.conf" ITEM_COLOR && ic="$CONF_VALUE" || ic=""
@@ -520,7 +522,7 @@ rewrite_theme() {
     [[ "$ic" =~ $COLOR_RE ]] || ic=""
     [[ "$sic" =~ $COLOR_RE ]] || sic=""
     awk -v tone="$TONE" -v ic="$ic" -v sic="$sic" -v logo="$LOGO" '
-        /^[[:space:]]*#/ && !/^#\[logo\] / { print; next }
+        /^[[:space:]]*#/ && !/^#\[(logo|menu)\] / { print; next }
         {
             gsub(/"tones\/(dark|light)\//, "\"tones/" tone "/")
             if (ic != "" && $0 ~ /^[[:space:]]*item_color[[:space:]]*=/) sub(/"[^"]*"/, "\"" ic "\"")

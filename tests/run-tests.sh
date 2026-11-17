@@ -108,7 +108,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.2.0' ]]"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.3.0' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -262,7 +262,7 @@ expect_rc 0 "--status sem helper/servico" "$MGR" --status
 section "Background Helper"
 expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
 expect_rc 0 "--install-helper" "$MGR" --install-helper
-check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.1.0 ]]"
+check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.1.1 ]]"
 expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
 printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
 prev=""; rep=0
@@ -478,6 +478,44 @@ check "  --status mostra o tom" bash -c "'$MGR' --status | grep -q 'Tom do tema 
 check "tom nunca executa grub-mkconfig" test ! -e "$T/grub-mkconfig.log"
 export KAWAII_ROOT="$R"
 
+section "Logo e contorno do menu (manager)"
+export KAWAII_ROOT="$R2"
+cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+fixed escuro.png; "$H2" -q
+menu_active() { sed -n '/^+ boot_menu/,/^}/p' "$TT/theme.txt" | grep -v '^[[:space:]]*#' | grep -E '^[[:space:]]*(left|top|width|height|menu_pixmap_style)[[:space:]]*=' | sed 's/^[[:space:]]*//' | tr '\n' ';'; }
+check "pacote: contorno ligado (limites +16 e menu_pixmap_style)" test "$(menu_active)" = 'left = 5%-16;top = 36%-16;width = 522;height = 44%+32;menu_pixmap_style = "tones/dark/boot_menu_box_*.png";'
+expect_rc 2 "--menu-box com valor invalido" "$MGR" --menu-box talvez
+expect_rc 2 "--logo sem valor" "$MGR" --logo
+if ((EUID != 0)); then
+    expect_rc 5 "--menu-box exige root" env -u KAWAII_SKIP_ROOT_CHECK "$MGR" --menu-box off
+fi
+expect_rc 0 "--dry-run --menu-box off" "$MGR" --dry-run --menu-box off
+check "  dry-run nao altera o theme.txt" cmp -s "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+expect_rc 0 "--menu-box off" "$MGR" --menu-box off
+check "  sem contorno: limites originais 5%, 36%, 490, 44% e sem menu_pixmap_style" test "$(menu_active)" = 'left = 5%;top = 36%;width = 490;height = 44%;'
+check "  so as linhas dos dois blocos mudaram (9)" test "$(diff "$PKG/grub-theme/theme.txt" "$TT/theme.txt" | grep -c '^>')" = 9
+check "  --status mostra o contorno desligado" bash -c "'$MGR' --status | grep -q 'Contorno do menu .*desligado'"
+ino="$(stat -c %i "$TT/theme.txt")"
+expect_rc 0 "--menu-box off de novo" "$MGR" --menu-box off
+check "  sem mudanca, o theme.txt nao e reescrito" test "$(stat -c %i "$TT/theme.txt")" = "$ino"
+fixed claro.png; "$H2" -q
+check "contorno desligado acompanha o tom (linha comentada em tones/light/)" grep -q '^#\[menu\] .*menu_pixmap_style = "tones/light/boot_menu_box_\*.png"' "$TT/theme.txt"
+expect_rc 0 "--menu-box on com o tom light" "$MGR" --menu-box on
+check "  contorno religado ja no tom light" bash -c "[[ \"\$1\" == *'menu_pixmap_style = \"tones/light/boot_menu_box_*.png\";' ]]" _ "$(menu_active)"
+fixed escuro.png; "$H2" -q
+check "off + on devolve o theme.txt do pacote" cmp -s "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+expect_rc 0 "--logo off" "$MGR" --logo off
+check "  logo desativado (+ image comentado)" bash -c "! sed -n '/^# >>> logo/,/^# <<< logo/p' '$TT/theme.txt' | grep -q '^+ image' && grep -q '^#\[logo\] + image' '$TT/theme.txt'"
+check "  --status mostra o logo desligado" bash -c "'$MGR' --status | grep -qE '^ +Logo +desligado'"
+expect_rc 0 "--logo on" "$MGR" --logo on
+check "  logo religado: theme.txt do pacote" cmp -s "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+sed '/menu-box$/d' "$PKG/grub-theme/theme.txt" > "$TT/theme.txt"
+expect_rc 3 "tema sem os marcadores (versao antiga) e recusado" "$MGR" --menu-box off
+check "  tema antigo nao e alterado" bash -c "diff <(sed '/menu-box\$/d' '$PKG/grub-theme/theme.txt') '$TT/theme.txt'"
+cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+check "sem temporarios no tema" bash -c "! find '$TT' -name '*.tmp*' | grep -q ."
+export KAWAII_ROOT="$R"
+
 section "Instalador: instalacao completa"
 L="$T/full-root"
 LT="$L/boot/grub/themes/kawaii-arch-theme"
@@ -494,7 +532,7 @@ check "theme.txt aponta para background.png" grep -qx 'desktop-image: "backgroun
 check "fallback.png instalado" test -f "$LT/fallback.png"
 check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundles/*/backgrounds/*.png; do cmp -s \"\$f\" '$LT/background.png' && exit 0; done; exit 1"
 check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.2.0' ]]"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.3.0' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"
@@ -522,6 +560,23 @@ out="$("$PKGT/install.sh" --yes 2>&1)"
 check "sem downgrade do tema" grep -q 'mais novo que o do pacote' <<< "$out"
 cp "$PKG/grub-theme/VERSION" "$LT/VERSION"
 
+section "Instalador: contorno do menu"
+lmenu() { sed -n '/^+ boot_menu/,/^}/p' "$LT/theme.txt" | grep -v '^[[:space:]]*#' | grep -c 'menu_pixmap_style'; }
+check "contorno ligado por padrao" test "$(lmenu)" = 1
+expect_rc 0 "--no-menu-box" "$PKGT/install.sh" --yes --no-menu-box
+check "  contorno desligado" test "$(lmenu)" = 0
+check "  limites originais ativos" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -qx '  width = 490'"
+sha_before="$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+expect_rc 0 "nova execucao sem a opcao preserva o estado" "$PKGT/install.sh" --yes
+check "  nada alterado (idempotente)" test "$sha_before" = "$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+echo 1.9.0 > "$LT/VERSION"
+expect_rc 0 "atualizacao do tema" "$PKGT/install.sh" --yes
+check "  atualizacao preserva o contorno desligado" test "$(lmenu)" = 0
+if command -v script >/dev/null; then
+    out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --bundles all --no-components" /dev/null 2>&1)"
+    check "pergunta sobre o contorno no modo interativo (padrao: estado atual)" grep -q 'contorno de vidro em volta do menu de boot? \[s/N\]' <<< "$out"
+fi
+
 section "Instalador: instalacao limpa (--fresh)"
 "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
 printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/backgrounds.conf"
@@ -532,11 +587,12 @@ grub_before="$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
 expect_rc 1 "--fresh com --uninstall e recusado" "$PKGT/install.sh" --fresh --uninstall --yes
 if command -v script >/dev/null; then
     snap="$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
-    printf 'n\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --bundles all --no-components" /dev/null >/dev/null 2>&1
+    printf 'n\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --menu-box --bundles all --no-components" /dev/null >/dev/null 2>&1
     check "--fresh cancelado na confirmacao nao altera nada" test "$snap" = "$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 fi
 out="$("$PKGT/install.sh" --fresh --yes --no-keep-config 2>&1)"; rc=$?
 check "--fresh --yes --no-keep-config (rc=0)" test "$rc" = 0
+check "--fresh volta o contorno do menu ao padrao (ligado)" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -v '^[[:space:]]*#' | grep -q menu_pixmap_style"
 check "avisa que o bundle fora do pacote sera perdido" grep -q 'serao perdidos: noname' <<< "$out"
 check "bundles = exatamente os do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
 check "configuracao recriada com os padroes (MODE=global)" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
@@ -584,10 +640,10 @@ check "wallpaper ativo = wallpaper fixo configurado" cmp -s "$PKGT/bundles/$fx_i
 check "modo fixed mantido" grep -qx "SELECTED_BACKGROUND=\"$fx_id/$fx_img\"" "$LD/config/backgrounds.conf"
 check "bundle importado nao referenciado foi apagado" test ! -e "$LD/bundles/noname"
 if command -v script >/dev/null; then
-    out="$(printf 'n\ns\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --bundles all --no-components" /dev/null 2>&1)"
+    out="$(printf 'n\ns\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
     check "pergunta sobre manter a configuracao no --fresh interativo" grep -q 'Manter a configuracao de wallpapers' <<< "$out"
     check "respondendo 'n', a configuracao volta ao padrao" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
-    out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --bundles all --no-components" /dev/null 2>&1)"
+    out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
     check "reinstalacao normal (sem --fresh) nao faz a pergunta" bash -c "! grep -q 'Manter a configuracao' <<< \"\$1\"" _ "$out"
 fi
 
