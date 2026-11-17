@@ -51,7 +51,7 @@ struct kam_paths {
     char bundles_dir[PATH_MAX];
     char config_dir[PATH_MAX];
     char state_dir[PATH_MAX];
-    char bg_conf[PATH_MAX];
+    char prefs_conf[PATH_MAX];   /* config/preferences.conf */
     char paths_conf[PATH_MAX];
     char last_bg[PATH_MAX];
     char apply_lock[PATH_MAX];
@@ -113,20 +113,28 @@ struct kv_list;
 struct kv_list *kv_load(const char *path, int *err);
 const char *kv_get(const struct kv_list *l, const char *key);
 int kv_set(struct kv_list *l, const char *key, const char *val);
-int kv_save(const struct kv_list *l, const char *path, const char *header);
 void kv_free(struct kv_list *l);
 int kv_parse_buf(struct kv_list *l, const char *buf, size_t len, char *err, size_t errsz);
 struct kv_list *kv_new(void);
 bool conf_value_safe(const char *v);
 
-struct bgconf {
+/* Preferencias do usuario: config/preferences.conf (fonte da verdade;
+ * o theme.txt e derivado delas) */
+struct prefs {
     char mode[16];
     char bundle[ID_MAX + 1];
     char background[ID_MAX + 2 + IMG_NAME_MAX];
+    char logo[8];       /* on | off */
+    char menu_box[8];   /* on | off */
+    char tone[8];       /* auto | dark | light */
 };
 int paths_init(void);
-int bgconf_load(struct bgconf *c, bool *exists_out);
-int bgconf_save(const struct bgconf *c);
+int prefs_load(struct prefs *c, bool *exists_out);
+int prefs_save(const struct prefs *c);
+int prefs_check(const struct prefs *c, char *err, size_t errsz); /* valores validos? */
+void prefs_warn_unknown(void);
+bool onoff_valid(const char *v);
+bool tone_valid(const char *v);
 bool mode_valid(const char *m);
 
 /* png.c */
@@ -136,6 +144,8 @@ int png_check_file(const char *path, struct png_info *pi, char *err, size_t errs
 
 /* layout.c */
 int theme_element_state(const char *which); /* "logo" | "menu-box": 1, 0, -1 */
+int layout_apply(int want_logo, int want_menu, bool dry, int *changed);
+int theme_write_begin(int *lk);
 int cmd_set_logo(const char *arg);
 int cmd_set_menu_box(const char *arg);
 
@@ -177,6 +187,7 @@ int cmd_remove_bundle(const char *id);
 int cmd_set_bundle(const char *id);
 int cmd_set_mode(const char *mode);
 int cmd_set_background(const char *spec);
+int config_satisfiable(const struct prefs *c, struct bundle *v, size_t n, bool verbose);
 
 /* import.c */
 struct kawall_info {
@@ -192,6 +203,10 @@ int cmd_list_available(const char *dir);
 int theme_mount_check(char *err, size_t errsz);
 int apply_now(bool announce);
 int cmd_randomize(void);
+void retone_now(void);
+
+/* reload.c */
+int cmd_reload_confs(void);
 
 /* components.c */
 void helper_version(const char *path, char *out, size_t sz);

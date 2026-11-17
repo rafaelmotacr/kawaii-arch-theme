@@ -128,7 +128,7 @@ static int pick(struct cand *v, size_t n, const char *last, struct cand *out)
     return -1;
 }
 
-static int select_internal(const struct bgconf *c, struct bundle *v, size_t n, const char *last,
+static int select_internal(const struct prefs *c, struct bundle *v, size_t n, const char *last,
                            struct cand *out, char *err, size_t errsz)
 {
     if (!strcmp(c->mode, "fixed")) {
@@ -250,14 +250,17 @@ static int keep_or_fallback(void)
     return -1;
 }
 
-/* Ajusta o tom do tema ao wallpaper ativo usando o helper do payload
- * (nao precisa estar instalado). Falhas so geram aviso. */
-static void retone_from_payload(void)
+/* Ajusta o tom do tema ao wallpaper ativo ('grub-random-bg.sh --retone'):
+ * usa o helper instalado ou, sem ele, a copia do payload. Falhas so geram
+ * aviso. Nao pode ser chamada com o lock de aplicacao tomado. */
+void retone_now(void)
 {
     char h[PATH_MAX];
-    pathf(h, sizeof h, "%s/%s", P.payload_dir, HELPER_NAME);
+    snprintf(h, sizeof h, "%s", P.helper_path);
+    if (!is_regular(h))
+        pathf(h, sizeof h, "%s/%s", P.payload_dir, HELPER_NAME);
     if (!is_regular(h)) {
-        note("Helper ausente no payload; o tom do tema nao foi ajustado");
+        note("Helper ausente (instalado e no payload); o tom do tema nao foi ajustado");
         return;
     }
     char *argv[] = {"bash", h, "--retone", "--quiet", NULL};
@@ -270,11 +273,11 @@ static int apply_internal(void)
 {
     bool retone = false;
     char err[512], last[ID_MAX + 2 + IMG_NAME_MAX] = "";
-    struct bgconf c;
+    struct prefs c;
     bool have;
     struct bundle *v = NULL;
     size_t n = 0;
-    int rc = bgconf_load(&c, &have);
+    int rc = prefs_load(&c, &have);
     if (rc)
         return rc;
     char *lb = read_file(P.last_bg, 1024, NULL);
@@ -291,7 +294,7 @@ static int apply_internal(void)
     struct cand ch;
     int sel = have ? select_internal(&c, v, n, last, &ch, err, sizeof err) : -1;
     if (!have)
-        snprintf(err, sizeof err, "configuracao ausente: %s", P.bg_conf);
+        snprintf(err, sizeof err, "configuracao ausente: %s", P.prefs_conf);
 
     if (O.dry_run) {
         if (sel == 0)
@@ -350,7 +353,7 @@ out:
     close(lk);   /* o helper usa o mesmo lock */
     bundles_free(v, n);
     if (retone)
-        retone_from_payload();
+        retone_now();
     return rc;
 }
 
@@ -377,8 +380,8 @@ int cmd_randomize(void)
     int rc;
     if (!O.dry_run && (rc = require_root("--randomize")))
         return rc;
-    struct bgconf c;
-    if ((rc = bgconf_load(&c, NULL)))
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)))
         return rc;
     if (!strcmp(c.mode, "fixed"))
         note("Modo 'fixed': sera aplicado sempre %s", c.background[0] ? c.background : "(nao definido)");

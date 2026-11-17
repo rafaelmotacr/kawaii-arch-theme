@@ -179,18 +179,24 @@ int cmd_status(void)
     }
 
     /* Configuracao */
-    struct bgconf c;
+    struct prefs c;
     bool have;
     struct bundle *bv = NULL;
     size_t bn = 0;
-    bgconf_load(&c, &have);
+    prefs_load(&c, &have);
     bundles_scan(&bv, &bn);
-    printf("\nConfiguracao (%s)\n", have ? P.bg_conf : "ausente; padroes");
+    printf("\nPreferencias (%s%s)\n", P.prefs_conf, have ? "" : ": ausente, valores padrao");
     printf("  %-22s %s\n", "Modo", c.mode);
     struct bundle *sb = c.bundle[0] ? bundle_find(bv, bn, c.bundle) : NULL;
     printf("  %-22s %s%s%s%s\n", "Bundle selecionado", c.bundle[0] ? c.bundle : "-", sb ? " (" : "",
            sb ? sb->name : "", sb ? ")" : (c.bundle[0] ? " [NAO INSTALADO]" : ""));
     printf("  %-22s %s\n", "Imagem fixa", c.background[0] ? c.background : "-");
+    printf("  %-22s %s\n", "LOGO", c.logo);
+    printf("  %-22s %s\n", "MENU_BOX", c.menu_box);
+    printf("  %-22s %s\n", "TONE", c.tone);
+    char perr[256];
+    if (prefs_check(&c, perr, sizeof perr) < 0)
+        printf("  %-22s %s\n", "ERRO", perr);
     char *lb = read_file(P.last_bg, 1024, NULL);
     if (lb)
         trim(lb);
@@ -220,6 +226,9 @@ int cmd_status(void)
         int lg = theme_element_state("logo"), mb = theme_element_state("menu-box");
         printf("  %-22s %s\n", "Logo", lg == 1 ? "ligado" : lg == 0 ? "desligado" : "-");
         printf("  %-22s %s\n", "Contorno do menu", mb == 1 ? "ligado" : mb == 0 ? "desligado" : "-");
+        if ((lg >= 0 && lg != !strcmp(c.logo, "on")) || (mb >= 0 && mb != !strcmp(c.menu_box, "on")))
+            printf("  %-22s o tema difere de %s: rode sudo %s --reload-confs\n", "Pendente", P.prefs_conf,
+                   KAM_PROG);
         pathf(p, sizeof p, "%s/%s", P.theme_dir, FALLBACK_NAME);
         printf("  %-22s %s\n", "Fallback", png_check_file(p, NULL, e, sizeof e) == 0 ? "presente" : "ausente");
         char merr[512];

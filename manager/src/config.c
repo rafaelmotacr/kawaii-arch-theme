@@ -1,4 +1,4 @@
-/* kawaii-arch-manager - arquivos KEY="valor", caminhos e backgrounds.conf
+/* kawaii-arch-manager - arquivos KEY="valor", caminhos e preferences.conf
  *
  * Os arquivos de configuracao sao compartilhados com o helper (bash), que
  * os le sem 'source'. Por isso os valores gravados nunca contem aspas,
@@ -175,23 +175,6 @@ struct kv_list *kv_load(const char *path, int *err)
     return l;
 }
 
-int kv_save(const struct kv_list *l, const char *path, const char *header)
-{
-    size_t cap = 256 + (header ? strlen(header) : 0), n = 0;
-    for (size_t i = 0; i < l->n; i++)
-        cap += strlen(l->v[i].key) + strlen(l->v[i].val) + 8;
-    char *buf = malloc(cap);
-    if (!buf)
-        return -1;
-    if (header)
-        n += (size_t)snprintf(buf + n, cap - n, "%s", header);
-    for (size_t i = 0; i < l->n; i++)
-        n += (size_t)snprintf(buf + n, cap - n, "%s=\"%s\"\n", l->v[i].key, l->v[i].val);
-    int r = write_file_atomic(path, buf, n, 0644);
-    free(buf);
-    return r;
-}
-
 /* ------------------------------------------------------------------ */
 static void build(char *dst, const char *suffix)
 {
@@ -226,7 +209,7 @@ int paths_init(void)
     build(P.bundles_dir, "/var/lib/kawaii-arch-manager/bundles");
     build(P.config_dir, "/var/lib/kawaii-arch-manager/config");
     build(P.state_dir, "/var/lib/kawaii-arch-manager/state");
-    build(P.bg_conf, "/var/lib/kawaii-arch-manager/config/backgrounds.conf");
+    build(P.prefs_conf, "/var/lib/kawaii-arch-manager/config/preferences.conf");
     build(P.paths_conf, "/var/lib/kawaii-arch-manager/config/paths.conf");
     build(P.last_bg, "/var/lib/kawaii-arch-manager/state/last-background");
     build(P.apply_lock, "/var/lib/kawaii-arch-manager/state/apply.lock");
@@ -282,18 +265,28 @@ bool mode_valid(const char *m)
     return !strcmp(m, "fixed") || !strcmp(m, "set") || !strcmp(m, "global") || !strcmp(m, "balanced");
 }
 
-int bgconf_load(struct bgconf *c, bool *exists_out)
+bool onoff_valid(const char *v) { return !strcmp(v, "on") || !strcmp(v, "off"); }
+bool tone_valid(const char *v) { return !strcmp(v, "auto") || !strcmp(v, "dark") || !strcmp(v, "light"); }
+
+static const char *const PREF_KEYS[] = {"MODE", "SELECTED_BUNDLE", "SELECTED_BACKGROUND", "LOGO", "MENU_BOX", "TONE"};
+#define NPREF_KEYS (sizeof PREF_KEYS / sizeof PREF_KEYS[0])
+
+/* Chave ausente = padrao (o mesmo do modelo config/preferences.conf) */
+int prefs_load(struct prefs *c, bool *exists_out)
 {
     memset(c, 0, sizeof *c);
     snprintf(c->mode, sizeof c->mode, "set");
+    snprintf(c->logo, sizeof c->logo, "on");
+    snprintf(c->menu_box, sizeof c->menu_box, "on");
+    snprintf(c->tone, sizeof c->tone, "auto");
     int e;
-    struct kv_list *l = kv_load(P.bg_conf, &e);
+    struct kv_list *l = kv_load(P.prefs_conf, &e);
     if (exists_out)
         *exists_out = l != NULL;
     if (!l) {
         if (e == ENOENT)
             return KAM_OK;
-        errmsg("nao foi possivel ler %s (%s)", P.bg_conf, e == EINVAL ? "formato invalido" : strerror(e));
+        errmsg("nao foi possivel ler %s (%s)", P.prefs_conf, e == EINVAL ? "formato invalido" : strerror(e));
         return KAM_EBUNDLE;
     }
     const char *v;
@@ -303,30 +296,137 @@ int bgconf_load(struct bgconf *c, bool *exists_out)
         snprintf(c->bundle, sizeof c->bundle, "%s", v);
     if ((v = kv_get(l, "SELECTED_BACKGROUND")))
         snprintf(c->background, sizeof c->background, "%s", v);
+    if ((v = kv_get(l, "LOGO")) && *v)
+        snprintf(c->logo, sizeof c->logo, "%s", v);
+    if ((v = kv_get(l, "MENU_BOX")) && *v)
+        snprintf(c->menu_box, sizeof c->menu_box, "%s", v);
+    if ((v = kv_get(l, "TONE")) && *v)
+        snprintf(c->tone, sizeof c->tone, "%s", v);
     kv_free(l);
     return KAM_OK;
 }
 
-/* Preserva chaves desconhecidas existentes no arquivo */
-int bgconf_save(const struct bgconf *c)
+int prefs_check(const struct prefs *c, char *err, size_t errsz)
+{
+    if (!mode_valid(c->mode))
+        snprintf(err, errsz, "MODE invalido: \"%s\" (fixed | set | global | balanced)", c->mode);
+    else if (c->bundle[0] && !bundle_id_valid(c->bundle))
+        snprintf(err, errsz, "SELECTED_BUNDLE invalido: \"%s\"", c->bundle);
+    else if (!onoff_valid(c->logo))
+        snprintf(err, errsz, "LOGO invalido: \"%s\" (on | off)", c->logo);
+    else if (!onoff_valid(c->menu_box))
+        snprintf(err, errsz, "MENU_BOX invalido: \"%s\" (on | off)", c->menu_box);
+    else if (!tone_valid(c->tone))
+        snprintf(err, errsz, "TONE invalido: \"%s\" (auto | dark | light)", c->tone);
+    else
+        return 0;
+    return -1;
+}
+
+void prefs_warn_unknown(void)
 {
     int e;
-    struct kv_list *l = kv_load(P.bg_conf, &e);
+    struct kv_list *l = kv_load(P.prefs_conf, &e);
     if (!l)
-        l = kv_new();
-    if (!l)
-        return KAM_EFAIL;
-    if (mkdir_p(P.config_dir, 0755) < 0 || kv_set(l, "MODE", c->mode) < 0 ||
-        kv_set(l, "SELECTED_BUNDLE", c->bundle) < 0 ||
-        kv_set(l, "SELECTED_BACKGROUND", c->background) < 0 ||
-        kv_save(l, P.bg_conf,
-                "# Kawaii Arch Manager - preferencias de wallpaper\n"
-                "# MODE: fixed | set | global | balanced\n"
-                "# SELECTED_BACKGROUND: ID/arquivo.png (usado no modo fixed)\n") < 0) {
-        errmsg("falha ao gravar %s: %s", P.bg_conf, strerror(errno));
-        kv_free(l);
-        return errno == EACCES || errno == EPERM || errno == EROFS ? KAM_EPRIV : KAM_EFAIL;
+        return;
+    for (size_t i = 0; i < l->n; i++) {
+        bool known = false;
+        for (size_t k = 0; k < NPREF_KEYS; k++)
+            known |= !strcmp(l->v[i].key, PREF_KEYS[k]);
+        if (!known)
+            warnmsg("%s: chave desconhecida ignorada: %s", P.prefs_conf, l->v[i].key);
     }
     kv_free(l);
-    return KAM_OK;
+}
+
+/* Linha "  CHAVE=..." (atribuicao, nao comentario) */
+static bool line_is_key(const char *l, size_t n, const char *key)
+{
+    while (n && (*l == ' ' || *l == '\t'))
+        l++, n--;
+    size_t kl = strlen(key);
+    return n > kl && !memcmp(l, key, kl) && l[kl] == '=';
+}
+
+/* Grava as preferencias trocando so o valor das linhas de cada chave:
+ * comentarios, ordem e chaves desconhecidas do usuario sao mantidos.
+ * Chave ausente vai para o fim. Sem arquivo, parte do modelo comentado
+ * do payload (config/preferences.conf do pacote). */
+struct sbuf {
+    char *p;
+    size_t n, cap;
+};
+
+static int sbuf_add(struct sbuf *b, const char *s, size_t n)
+{
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : 1024;
+        while (cap < b->n + n + 1)
+            cap *= 2;
+        char *q = realloc(b->p, cap);
+        if (!q)
+            return -1;
+        b->p = q;
+        b->cap = cap;
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+    b->p[b->n] = '\0';
+    return 0;
+}
+
+static int sbuf_kv(struct sbuf *b, const char *key, const char *val)
+{
+    return sbuf_add(b, key, strlen(key)) || sbuf_add(b, "=\"", 2) || sbuf_add(b, val, strlen(val)) ||
+           sbuf_add(b, "\"\n", 2);
+}
+
+int prefs_save(const struct prefs *c)
+{
+    const char *vals[NPREF_KEYS] = {c->mode, c->bundle, c->background, c->logo, c->menu_box, c->tone};
+    bool done[NPREF_KEYS] = {false};
+    char tpl[PATH_MAX];
+    size_t len = 0;
+    for (size_t k = 0; k < NPREF_KEYS; k++)
+        if (!conf_value_safe(vals[k])) {
+            errmsg("valor invalido para %s", PREF_KEYS[k]);
+            return KAM_EUSAGE;
+        }
+    char *old = read_file(P.prefs_conf, 1024 * 1024, &len);
+    if (!old) {
+        pathf(tpl, sizeof tpl, "%s/preferences.conf", P.payload_dir);
+        old = read_file(tpl, 1024 * 1024, &len);
+        if (!old)
+            len = 0;
+    }
+    struct sbuf out = {0};
+    int bad = 0;
+    for (size_t i = 0; i < len && !bad;) {
+        const char *l = old + i, *nl = memchr(l, '\n', len - i);
+        size_t ln = nl ? (size_t)(nl - l) : len - i;
+        size_t k = 0;
+        while (k < NPREF_KEYS && !line_is_key(l, ln, PREF_KEYS[k]))
+            k++;
+        if (k < NPREF_KEYS) {
+            bad = sbuf_kv(&out, PREF_KEYS[k], vals[k]);
+            done[k] = true;
+        } else {
+            bad = sbuf_add(&out, l, ln) || sbuf_add(&out, "\n", 1);
+        }
+        i += nl ? ln + 1 : ln;
+    }
+    free(old);
+    for (size_t k = 0; k < NPREF_KEYS && !bad; k++)
+        if (!done[k])
+            bad = sbuf_kv(&out, PREF_KEYS[k], vals[k]);
+    int rc = KAM_OK;
+    if (bad) {
+        errmsg("sem memoria");
+        rc = KAM_EFAIL;
+    } else if (mkdir_p(P.config_dir, 0755) < 0 || write_file_atomic(P.prefs_conf, out.p, out.n, 0644) < 0) {
+        errmsg("falha ao gravar %s: %s", P.prefs_conf, strerror(errno));
+        rc = errno == EACCES || errno == EPERM || errno == EROFS ? KAM_EPRIV : KAM_EFAIL;
+    }
+    free(out.p);
+    return rc;
 }

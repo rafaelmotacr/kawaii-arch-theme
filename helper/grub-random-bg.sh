@@ -11,8 +11,9 @@
 #  <tema>/icons/ o conjunto de <tema>/icon-sets/<tom>/ e reescreve no
 #  theme.txt somente as cores do menu, os caminhos tones/<tom>/ e o logo
 #  (logos/<distro>-<tom>.png, distro lida de /etc/os-release; fallback:
-#  arch). A claridade e medida por 'kawaii-arch-manager --tone'; sem o
-#  manager, o tom e sempre "dark" (o visual padrao do tema).
+#  arch). Com TONE="auto" (padrao) a claridade e medida por
+#  'kawaii-arch-manager --tone' (sem o manager, o tom e "dark", o visual
+#  padrao do tema); TONE="dark" ou "light" forca o tom.
 #
 #  Uso:
 #    grub-random-bg.sh              seleciona e aplica um wallpaper
@@ -23,8 +24,10 @@
 #
 #  Arquivos (somente leitura, exceto onde indicado):
 #    /var/lib/kawaii-arch-manager/config/paths.conf       THEME_DIR, EXPECTED_MOUNT
-#    /var/lib/kawaii-arch-manager/config/backgrounds.conf MODE, SELECTED_BUNDLE,
-#                                                         SELECTED_BACKGROUND
+#    /var/lib/kawaii-arch-manager/config/preferences.conf MODE, SELECTED_BUNDLE,
+#                                                         SELECTED_BACKGROUND, TONE
+#                                                         (LOGO e MENU_BOX sao
+#                                                         aplicados pelo manager)
 #    /var/lib/kawaii-arch-manager/bundles/<id>/           bundles instalados
 #    /var/lib/kawaii-arch-manager/state/last-background   (escrita)
 #    <THEME_DIR>/background.png                           (escrita)
@@ -46,7 +49,7 @@ export LC_ALL=C
 
 # Versao do helper (SemVer). Lida como texto pelo instalador e pelo
 # manager (sem executar o script): mantenha o formato VERSION="x.y.z".
-VERSION="2.1.1"
+VERSION="2.2.0"
 
 readonly E_OK=0 E_FAIL=1 E_USAGE=2 E_CONFIG=3 E_BUSY=4 E_PERM=5
 
@@ -56,7 +59,7 @@ DATA_DIR="$ROOT/var/lib/kawaii-arch-manager"
 BUNDLES_DIR="$DATA_DIR/bundles"
 CONF_DIR="$DATA_DIR/config"
 STATE_DIR="$DATA_DIR/state"
-BG_CONF="$CONF_DIR/backgrounds.conf"
+PREFS="$CONF_DIR/preferences.conf"
 PATHS_CONF="$CONF_DIR/paths.conf"
 LAST_FILE="$STATE_DIR/last-background"
 LOCK_FILE="$STATE_DIR/apply.lock"
@@ -288,7 +291,7 @@ pick_from_list() {
 
 select_fixed() {
     local sel id name
-    conf_get "$BG_CONF" SELECTED_BACKGROUND; sel="$CONF_VALUE"
+    conf_get "$PREFS" SELECTED_BACKGROUND; sel="$CONF_VALUE"
     if [[ -z "$sel" ]]; then log_err "modo 'fixed' sem SELECTED_BACKGROUND"; return 1; fi
     id="${sel%%/*}"; name="${sel#*/}"
     [[ "$sel" == */* ]] && [[ "$id" =~ $ID_RE ]] && [[ "$name" =~ $IMG_RE ]] || {
@@ -300,7 +303,7 @@ select_fixed() {
 
 select_set() {
     local id img; local -a all=()
-    conf_get "$BG_CONF" SELECTED_BUNDLE; id="$CONF_VALUE"
+    conf_get "$PREFS" SELECTED_BUNDLE; id="$CONF_VALUE"
     if [[ -z "$id" ]]; then log_err "modo 'set' sem SELECTED_BUNDLE"; return 1; fi
     bundle_usable "$id" || { log_err "bundle selecionado '$id' nao esta instalado ou e invalido; atualize a configuracao (kawaii-arch-manager --set-bundle)"; return 1; }
     bundle_images "$id"
@@ -362,11 +365,11 @@ select_balanced() {
 
 select_image() {
     local mode
-    if [[ ! -r "$BG_CONF" ]]; then
-        log_err "configuracao ausente ou ilegivel: $BG_CONF"
+    if [[ ! -r "$PREFS" ]]; then
+        log_err "configuracao ausente ou ilegivel: $PREFS"
         return 1
     fi
-    conf_get "$BG_CONF" MODE; mode="${CONF_VALUE:-set}"
+    conf_get "$PREFS" MODE; mode="${CONF_VALUE:-set}"
     if [[ -r "$LAST_FILE" ]]; then
         IFS= read -r LAST < "$LAST_FILE" || true
         [[ "$LAST" == */* ]] || LAST=""
@@ -376,7 +379,7 @@ select_image() {
         set)      select_set ;;
         global)   select_global ;;
         balanced) select_balanced ;;
-        *) log_err "MODE invalido em $BG_CONF: \"$mode\" (fixed|set|global|balanced)"; return 1 ;;
+        *) log_err "MODE invalido em $PREFS: \"$mode\" (fixed|set|global|balanced)"; return 1 ;;
     esac
 }
 
@@ -539,11 +542,21 @@ rewrite_theme() {
     return 0
 }
 
-# apply_tone: mede o wallpaper ativo e ajusta icones, cores e logo.
-# Temas sem tones/ (versoes antigas) sao deixados como estao.
+# apply_tone: escolhe o tom (TONE das preferencias ou medido no wallpaper
+# ativo) e ajusta icones, cores e logo.
 apply_tone() {
-    [[ -d "$THEME_DIR/tones/dark" && -d "$THEME_DIR/tones/light" ]] || return 0
-    measure_tone "$THEME_DIR/$ACTIVE_NAME"
+    if [[ ! -d "$THEME_DIR/tones/dark" || ! -d "$THEME_DIR/tones/light" ]]; then
+        log_warn "tema incompleto (sem tones/dark e tones/light); tom nao ajustado (reinstale o tema)"
+        return 0
+    fi
+    local pref=""
+    conf_get "$PREFS" TONE && pref="$CONF_VALUE"
+    case "${pref:-auto}" in
+        dark|light) TONE="$pref" ;;
+        auto)       measure_tone "$THEME_DIR/$ACTIVE_NAME" ;;
+        *)          log_warn "TONE invalido em $PREFS: \"$pref\" (auto|dark|light); usando auto"
+                    measure_tone "$THEME_DIR/$ACTIVE_NAME" ;;
+    esac
     pick_logo
     sync_icons || log_warn "falha ao atualizar os icones do tom $TONE"
     rewrite_theme || { log_warn "falha ao atualizar o theme.txt para o tom $TONE"; return 0; }

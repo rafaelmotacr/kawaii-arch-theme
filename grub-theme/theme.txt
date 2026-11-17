@@ -1,3 +1,8 @@
+# Nao configure o tema aqui: as preferencias (logo, contorno do menu, tom,
+# wallpaper) ficam em /var/lib/kawaii-arch-manager/config/preferences.conf
+# e sao aplicadas neste arquivo pelo install.sh e por
+# 'kawaii-arch-manager --reload-confs'.
+
 # Main options
 title-text: ""
 #
@@ -43,8 +48,8 @@ terminal-border: "0"
 # tools/make_glass.py). O GRUB desenha essa moldura DENTRO dos limites do
 # menu e reserva 16 px (tamanho dos tiles) de cada lado para ela. Por isso
 # ha dois blocos de limites, e so um fica ativo (o outro recebe o prefixo
-# "#[menu] "; quem alterna e o install.sh e 'kawaii-arch-manager
-# --menu-box on|off' - mantenha os marcadores):
+# "#[menu] "; o ativo segue MENU_BOX do preferences.conf - mantenha os
+# marcadores):
 #   menu-box     com contorno: a area das entradas expandida em 16 px por
 #                lado (5%-16, 36%-16, 490+32, 44%+32) + menu_pixmap_style
 #   no-menu-box  sem contorno: a area das entradas (5%, 36%, 490 x 44%)
@@ -80,7 +85,8 @@ terminal-border: "0"
 
 
 # >>> logo
-# (bloco ativado/desativado pelo install.sh - mantenha os marcadores)
+# (bloco ativado/desativado conforme LOGO do preferences.conf - mantenha os
+# marcadores)
 # Logo da distribuicao (logos/<id>-<tom>.png, escolhido pelo seletor)
 # Mesma margem esquerda do menu, abaixo dele e acima da barra de progresso.
 # Tamanho original da imagem (256x85) para nao haver redimensionamento.

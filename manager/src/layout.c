@@ -1,12 +1,12 @@
 /* kawaii-arch-manager - elementos opcionais do tema (logo e contorno do menu)
  *
- * O theme.txt marca os elementos opcionais com blocos:
+ * A preferencia fica em config/preferences.conf (LOGO, MENU_BOX); aqui ela
+ * e aplicada no theme.txt, que marca os elementos opcionais com blocos:
  *     # >>> NOME
  *     ...linhas...
  *     # <<< NOME
  * Um bloco desativado tem todas as linhas com o prefixo "#[TAG] " (o GRUB
- * as le como comentario). O estado fica no proprio theme.txt; o install.sh
- * usa os mesmos blocos.
+ * as le como comentario). O install.sh usa os mesmos blocos.
  *   logo         TAG logo: o "+ image" do logo da distribuicao
  *   menu-box     TAG menu: limites do menu +16 px por lado e o contorno
  *   no-menu-box  TAG menu: limites originais, sem contorno (ativo quando o
@@ -156,61 +156,52 @@ int theme_element_state(const char *which)
     return st;
 }
 
-static int set_element(bool menu, const char *arg)
+/* Aplica logo e contorno do menu no theme.txt: want_* = 1 liga, 0 desliga,
+ * -1 nao mexe. Uma unica escrita atomica, so se algo mudar. Nao toma o
+ * lock nem confere a montagem (quem chama faz isso). *changed recebe
+ * quantos elementos mudaram (ou mudariam, em dry-run). */
+int layout_apply(int want_logo, int want_menu, bool dry, int *changed)
 {
-    const char *opt = menu ? "--menu-box" : "--logo";
-    const char *what = menu ? "contorno do menu" : "logo";
-    int rc;
-    if (!arg || (strcmp(arg, "on") && strcmp(arg, "off"))) {
-        errmsg("%s: use on ou off", opt);
-        return KAM_EUSAGE;
-    }
-    bool on = !strcmp(arg, "on");
-    if (!O.dry_run && (rc = require_root(opt)))
-        return rc;
-
-    char err[512], path[PATH_MAX];
-    if ((rc = theme_mount_check(err, sizeof err)) != KAM_OK) {
-        errmsg("%s", err);
-        return rc;
-    }
-    int lk = -1;
-    if (!O.dry_run) {
-        if (mkdir_p(P.state_dir, 0755) < 0 || (lk = lock_file(P.apply_lock, 30)) < 0) {
-            errmsg("outra aplicacao no tema esta em andamento (ou %s inacessivel)", P.state_dir);
-            return KAM_ECONFLICT;
-        }
-    }
+    char path[PATH_MAX];
     size_t len;
     struct buf out = {0};
+    int rc = KAM_OK, n = 0;
+    *changed = 0;
     char *t = load_theme(path, sizeof path, &len);
     if (!t) {
         errmsg("nao foi possivel ler %s: %s", path, strerror(errno));
-        rc = KAM_EFAIL;
-        goto done;
+        return KAM_EFAIL;
     }
-    int st = element_state(t, len, menu);
-    if (st < 0) {
-        errmsg("o tema instalado nao tem os marcadores do %s em %s; atualize o tema (install.sh)", what, path);
-        rc = KAM_EBUNDLE;
-        goto done;
+    int cur_logo = want_logo < 0 ? -1 : element_state(t, len, false);
+    int cur_menu = want_menu < 0 ? -1 : element_state(t, len, true);
+    if ((want_logo >= 0 && cur_logo < 0) || (want_menu >= 0 && cur_menu < 0)) {
+        errmsg("%s nao tem os marcadores do %s; o tema esta incompleto ou invalido (reinstale o tema)", path,
+               want_logo >= 0 && cur_logo < 0 ? "logo" : "contorno do menu");
+        free(t);
+        return KAM_EBUNDLE;
     }
-    if (st == (int)on) {
-        msg("O %s ja esta %s; nada a fazer", what, on ? "ligado" : "desligado");
-        rc = KAM_OK;
-        goto done;
+    struct blockop ops[3];
+    size_t nops = 0;
+    if (want_logo >= 0 && want_logo != cur_logo) {
+        ops[nops++] = (struct blockop){"logo", "logo", want_logo, false, false, false};
+        msg("%sLogo: %s -> %s", dry ? "[dry-run] " : "", cur_logo ? "ligado" : "desligado",
+            want_logo ? "ligado" : "desligado");
+        n++;
     }
-    if (O.dry_run) {
-        msg("O %s seria %s (nada foi alterado)", what, on ? "ligado" : "desligado");
-        rc = KAM_OK;
-        goto done;
+    if (want_menu >= 0 && want_menu != cur_menu) {
+        ops[nops++] = (struct blockop){"menu-box", "menu", want_menu, false, false, false};
+        ops[nops++] = (struct blockop){"no-menu-box", "menu", !want_menu, false, false, false};
+        msg("%sContorno do menu: %s -> %s", dry ? "[dry-run] " : "", cur_menu ? "ligado" : "desligado",
+            want_menu ? "ligado" : "desligado");
+        n++;
     }
-    struct blockop ops[2] = {
-        {menu ? "menu-box" : "logo", menu ? "menu" : "logo", on, false, false, false},
-        {"no-menu-box", "menu", !on, false, false, false},
-    };
-    if (process(t, len, ops, menu ? 2 : 1, &out) < 0 || !out.p ||
-        !strstr(out.p, "\ndesktop-image: \"background.png\"") || element_state(out.p, out.n, menu) != (int)on) {
+    *changed = n;
+    if (!nops || dry)
+        goto done;
+    if (process(t, len, ops, nops, &out) < 0 || !out.p ||
+        !strstr(out.p, "\ndesktop-image: \"background.png\"") ||
+        (want_logo >= 0 && element_state(out.p, out.n, false) != want_logo) ||
+        (want_menu >= 0 && element_state(out.p, out.n, true) != want_menu)) {
         errmsg("falha ao gerar o novo theme.txt; nada foi alterado");
         rc = KAM_EFAIL;
         goto done;
@@ -218,13 +209,58 @@ static int set_element(bool menu, const char *arg)
     if (write_file_atomic(path, out.p, out.n, 0644) < 0) {
         errmsg("nao foi possivel gravar %s: %s", path, strerror(errno));
         rc = errno == EACCES || errno == EROFS ? KAM_EPRIV : KAM_EFAIL;
-        goto done;
     }
-    msg("%s %s (vale a partir do proximo boot)", menu ? "Contorno do menu" : "Logo", on ? "ligado" : "desligado");
-    rc = KAM_OK;
 done:
     free(t);
     free(out.p);
+    return rc;
+}
+
+/* Confere a montagem e toma o lock de aplicacao (fd ou codigo < 0) */
+int theme_write_begin(int *lk)
+{
+    char err[512];
+    int rc;
+    *lk = -1;
+    if ((rc = theme_mount_check(err, sizeof err)) != KAM_OK) {
+        errmsg("%s", err);
+        return rc;
+    }
+    if (O.dry_run)
+        return KAM_OK;
+    if (mkdir_p(P.state_dir, 0755) < 0 || (*lk = lock_file(P.apply_lock, 30)) < 0) {
+        errmsg("outra aplicacao no tema esta em andamento (ou %s inacessivel)", P.state_dir);
+        return KAM_ECONFLICT;
+    }
+    return KAM_OK;
+}
+
+/* --logo / --menu-box: grava a preferencia e aplica no theme.txt */
+static int set_element(bool menu, const char *arg)
+{
+    const char *opt = menu ? "--menu-box" : "--logo";
+    int rc, lk, changed;
+    if (!arg || !onoff_valid(arg)) {
+        errmsg("%s: use on ou off", opt);
+        return KAM_EUSAGE;
+    }
+    int on = !strcmp(arg, "on");
+    if (!O.dry_run && (rc = require_root(opt)))
+        return rc;
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)))
+        return rc;
+    if ((rc = theme_write_begin(&lk)))
+        return rc;
+    rc = layout_apply(menu ? -1 : on, menu ? on : -1, O.dry_run, &changed);
+    if (rc == KAM_OK && !O.dry_run) {
+        snprintf(menu ? c.menu_box : c.logo, sizeof c.logo, "%s", arg);
+        rc = prefs_save(&c);
+    }
+    if (rc == KAM_OK && !changed)
+        msg("O %s ja esta %s; nada a fazer no tema", menu ? "contorno do menu" : "logo", on ? "ligado" : "desligado");
+    else if (rc == KAM_OK && !O.dry_run)
+        note("Preferencia gravada em %s; vale a partir do proximo boot", P.prefs_conf);
     if (lk >= 0)
         close(lk);
     return rc;

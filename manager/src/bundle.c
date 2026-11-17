@@ -248,8 +248,8 @@ int cmd_list_bundles(void)
 {
     struct bundle *v;
     size_t n;
-    struct bgconf c;
-    bgconf_load(&c, NULL);
+    struct prefs c;
+    prefs_load(&c, NULL);
     if (bundles_scan(&v, &n) < 0) {
         errmsg("nao foi possivel ler %s: %s", P.bundles_dir, strerror(errno));
         return KAM_EFAIL;
@@ -318,7 +318,7 @@ static int checked_bundle(struct bundle *v, size_t n, const char *id, struct bun
 }
 
 /* Verifica se a configuracao (modo + selecoes) e satisfeita */
-static int config_satisfiable(const struct bgconf *c, struct bundle *v, size_t n, bool verbose)
+int config_satisfiable(const struct prefs *c, struct bundle *v, size_t n, bool verbose)
 {
     struct bundle *b;
     size_t usable = 0;
@@ -367,14 +367,14 @@ int cmd_set_bundle(const char *id)
         return KAM_EFAIL;
     struct bundle *v, *b;
     size_t n;
-    struct bgconf c;
-    if ((rc = bgconf_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
         close(lk);
         return rc ? rc : KAM_EFAIL;
     }
     if ((rc = checked_bundle(v, n, id, &b)) == KAM_OK) {
         snprintf(c.bundle, sizeof c.bundle, "%s", id);
-        if ((rc = bgconf_save(&c)) == KAM_OK) {
+        if ((rc = prefs_save(&c)) == KAM_OK) {
             msg("Bundle selecionado: %s (%s, %zu imagens)", b->id, b->name, b->nvalid);
             if (strcmp(c.mode, "set"))
                 note("O modo atual e '%s'; o bundle so e usado no modo 'set' (--set-mode set).", c.mode);
@@ -401,13 +401,13 @@ int cmd_set_mode(const char *mode)
         return KAM_EFAIL;
     struct bundle *v;
     size_t n;
-    struct bgconf c;
-    if ((rc = bgconf_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
         close(lk);
         return rc ? rc : KAM_EFAIL;
     }
     snprintf(c.mode, sizeof c.mode, "%s", mode);
-    if ((rc = config_satisfiable(&c, v, n, true)) == KAM_OK && (rc = bgconf_save(&c)) == KAM_OK) {
+    if ((rc = config_satisfiable(&c, v, n, true)) == KAM_OK && (rc = prefs_save(&c)) == KAM_OK) {
         msg("Modo de selecao: %s", mode);
         note("Aplicado no proximo boot, ou agora com: sudo %s --randomize", KAM_PROG);
     }
@@ -441,8 +441,8 @@ int cmd_set_background(const char *spec)
         return KAM_EFAIL;
     struct bundle *v, *b;
     size_t n;
-    struct bgconf c;
-    if ((rc = bgconf_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
         close(lk);
         return rc ? rc : KAM_EFAIL;
     }
@@ -460,7 +460,7 @@ int cmd_set_background(const char *spec)
         } else {
             snprintf(c.mode, sizeof c.mode, "fixed");
             snprintf(c.background, sizeof c.background, "%s/%s", id, name);
-            if ((rc = bgconf_save(&c)) == KAM_OK)
+            if ((rc = prefs_save(&c)) == KAM_OK)
                 msg("Wallpaper fixo: %s (modo: fixed)", c.background);
         }
     }
@@ -485,8 +485,8 @@ int cmd_remove_bundle(const char *id)
         return KAM_EFAIL;
     struct bundle *v, *b;
     size_t n;
-    struct bgconf c;
-    if ((rc = bgconf_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
+    struct prefs c;
+    if ((rc = prefs_load(&c, NULL)) || bundles_scan(&v, &n) < 0) {
         close(lk);
         return rc ? rc : KAM_EFAIL;
     }

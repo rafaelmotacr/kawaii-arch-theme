@@ -1108,9 +1108,9 @@ int cmd_import_bundle(const char *path)
 
     /* 12-13. sem indice; selecao atual nao e alterada */
     msg("Bundle '%s' %s (versao %s).", nb->id, replace ? "atualizado" : "importado", nb->version);
-    struct bgconf c;
+    struct prefs c;
     bool have;
-    if (bgconf_load(&c, &have) == KAM_OK) {
+    if (prefs_load(&c, &have) == KAM_OK) {
         char fid[ID_MAX + 1] = "", fname[IMG_NAME_MAX + 1] = "";
         if (!strcmp(c.mode, "fixed") && sscanf(c.background, "%64[^/]/%255s", fid, fname) == 2 &&
             !strcmp(fid, nb->id)) {

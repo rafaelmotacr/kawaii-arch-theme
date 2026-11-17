@@ -22,8 +22,8 @@
 #                                            componentes, bundles, configuracao
 #                                            e estado, e reinstala a partir do
 #                                            pacote (pede confirmacao; pergunta
-#                                            se a configuracao de wallpapers
-#                                            deve ser mantida)
+#                                            se as preferencias devem ser
+#                                            mantidas)
 #    sudo ./install.sh --uninstall [--purge] remove tema e componentes
 #                                            (--purge apaga bundles/config)
 #  Opcoes:
@@ -58,6 +58,7 @@ SRC_BUNDLES="$SRC_DIR/bundles"
 SRC_HELPER="$SRC_DIR/helper/grub-random-bg.sh"
 SRC_UNIT="$SRC_DIR/systemd/grub-random-bg.service.in"
 SRC_MANAGER="$SRC_DIR/manager"
+SRC_PREFS="$SRC_DIR/config/preferences.conf"   # modelo comentado das preferencias
 
 # KAWAII_ROOT: prefixo para testes em sandbox (nao toca o sistema real)
 ROOT="${KAWAII_ROOT:-}"
@@ -65,7 +66,7 @@ DATA_DIR="$ROOT/var/lib/kawaii-arch-manager"
 BUNDLES_DIR="$DATA_DIR/bundles"
 CONF_DIR="$DATA_DIR/config"
 STATE_DIR="$DATA_DIR/state"
-BG_CONF="$CONF_DIR/backgrounds.conf"
+PREFS="$CONF_DIR/preferences.conf"   # preferencias do usuario (fonte da verdade)
 PATHS_CONF="$CONF_DIR/paths.conf"
 LIB_DIR="$ROOT/usr/lib/kawaii-arch-manager"
 HELPER_PATH="$LIB_DIR/grub-random-bg.sh"
@@ -105,7 +106,7 @@ declare -A RESULT=()
 PKG_BUNDLES=()        # IDs validos encontrados em bundles/ do pacote
 declare -A PKG_NAME=() PKG_VER=() PKG_COUNT=()
 WANT_BUNDLES=()
-KEEP_CONFIG=0         # --fresh: manter backgrounds.conf, estado e wallpaper ativo
+KEEP_CONFIG=0         # --fresh: manter preferences.conf, estado e wallpaper ativo
 KEEP_REFS=()          # bundles referenciados pela configuracao mantida
 KEEP_BUNDLES=()       # desses, os que nao estao no pacote (preservados no wipe)
 KEEP_DIR=""           # guarda temporaria durante o --fresh
@@ -333,11 +334,15 @@ detect_state() {
     local tv; tv="$(theme_version)"
     if [[ -n "$tv" ]]; then
         note "Tema:               v$tv em $THEME_RAW"
-        OLD_LOGO_STATE="$(logo_state "$THEME_FILE")"
-        OLD_MENU_STATE="$(menu_state "$THEME_FILE")"
     else
         note "Tema:               nao instalado"
     fi
+
+    # Logo e contorno: o padrao das perguntas vem das preferencias
+    OLD_LOGO_STATE="$(conf_get "$PREFS" LOGO || true)"
+    OLD_MENU_STATE="$(conf_get "$PREFS" MENU_BOX || true)"
+    [[ "$OLD_LOGO_STATE" == on || "$OLD_LOGO_STATE" == off ]] || OLD_LOGO_STATE=""
+    [[ "$OLD_MENU_STATE" == on || "$OLD_MENU_STATE" == off ]] || OLD_MENU_STATE=""
 
     local mv; mv="$(manager_version)"
     note "Manager:            ${mv:+v$mv}${mv:-nao instalado}"
@@ -366,6 +371,7 @@ preflight() {
 
     info "Verificando o pacote"
     [[ -f "$SRC_THEME/theme.txt" ]] || die "nao encontrado: grub-theme/theme.txt"
+    [[ -f "$SRC_PREFS" ]] || die "nao encontrado: config/preferences.conf"
     grep -qx 'desktop-image: "background.png"' "$SRC_THEME/theme.txt" \
         || die "theme.txt do pacote deve usar desktop-image: \"background.png\""
     semver_valid "$(tr -d '[:space:]' < "$SRC_THEME/VERSION" 2>/dev/null)" || die "grub-theme/VERSION ausente ou invalido"
@@ -396,8 +402,9 @@ decide() {   # decide OPT pergunta-instalar default -> echo install|skip
 plan() {
     if ((FRESH)); then
         plan_fresh
-        OLD_LOGO_STATE=""   # instalacao limpa: padroes do pacote
-        OLD_MENU_STATE=""
+        if ((!KEEP_CONFIG)); then   # instalacao limpa sem manter: padroes do pacote
+            OLD_LOGO_STATE=""; OLD_MENU_STATE=""
+        fi
     fi
 
     # Logo
@@ -607,7 +614,7 @@ plan_bundles() {
     for ref in "${KEEP_REFS[@]}"; do
         [[ " ${PKG_BUNDLES[*]} " == *" $ref "* && " ${WANT_BUNDLES[*]} " != *" $ref "* ]] || continue
         WANT_BUNDLES+=("$ref")
-        note "Bundle '$ref' incluido: e usado pela configuracao de wallpapers mantida"
+        note "Bundle '$ref' incluido: e usado pelas preferencias mantidas"
     done
     if ((${#WANT_BUNDLES[@]})); then
         note "Selecionados: ${WANT_BUNDLES[*]}"
@@ -816,18 +823,32 @@ ensure_active_background() {
     info "background.png recriado a partir de $(raw_path "$bg")"
 }
 
-# backgrounds.conf: criado somente se ausente (configuracao do usuario e
-# sempre preservada). Padrao: modo 'global' (todos os bundles).
-setup_bg_config() {
-    if [[ -f "$BG_CONF" ]]; then
-        info "Configuracao de wallpapers preservada ($(raw_path "$BG_CONF"): MODE=$(conf_get "$BG_CONF" MODE))"
-        return 0
+# pref_set ARQUIVO CHAVE VALOR: troca so o valor da linha da chave
+# (comentarios e ordem do usuario mantidos; chave ausente vai para o fim).
+# Grava apenas se mudar.
+pref_set() {
+    local f="$1" key="$2" val="$3" new
+    new="$(awk -v k="$key" -v v="$val" '
+        $0 ~ "^[[:space:]]*" k "=" { print k "=\"" v "\""; done = 1; next }
+        { print }
+        END { if (!done) print k "=\"" v "\"" }' "$f")" || return 1
+    [[ "$new" == "$(cat "$f")" ]] && return 0
+    printf '%s\n' "$new" | write_atomic "$f" 644
+}
+
+# preferences.conf: criado a partir do modelo do pacote (comentado) se
+# ausente; senao e preservado. As respostas sobre logo e contorno do menu
+# sao gravadas nele (o tema e montado a partir delas).
+setup_prefs() {
+    if [[ -f "$PREFS" ]]; then
+        info "Preferencias preservadas ($(raw_path "$PREFS"): MODE=$(conf_get "$PREFS" MODE))"
+    else
+        write_atomic "$PREFS" 644 < "$SRC_PREFS" || die "falha ao gravar $PREFS"
+        pref_set "$PREFS" SELECTED_BUNDLE "$(installed_bundles | sed -n 1p)" || die "falha ao gravar $PREFS"
+        info "Preferencias criadas em $(raw_path "$PREFS") (MODE=global)"
     fi
-    local first
-    first="$(installed_bundles | sed -n 1p)"
-    printf '# Kawaii Arch Manager - preferencias de wallpaper\n# MODE: fixed | set | global | balanced\n# SELECTED_BUNDLE: ID (usado no modo set)\n# SELECTED_BACKGROUND: ID/arquivo.png (usado no modo fixed)\nMODE="global"\nSELECTED_BUNDLE="%s"\nSELECTED_BACKGROUND=""\n' \
-        "$first" | write_atomic "$BG_CONF" 644 || die "falha ao gravar $BG_CONF"
-    info "Configuracao criada: MODE=global"
+    pref_set "$PREFS" LOGO "$WANT_LOGO" && pref_set "$PREFS" MENU_BOX "$WANT_MENU" \
+        || die "falha ao gravar LOGO/MENU_BOX em $PREFS"
 }
 
 # ---------------------------------------------------------------------
@@ -838,6 +859,7 @@ install_payload() {
     install -m 644 "$SRC_HELPER" "$PAYLOAD_DIR/grub-random-bg.sh" || return 1
     install -m 644 "$SRC_UNIT" "$PAYLOAD_DIR/grub-random-bg.service.in" || return 1
     install -m 644 "$SRC_THEME/VERSION" "$PAYLOAD_DIR/theme-version" || return 1
+    install -m 644 "$SRC_PREFS" "$PAYLOAD_DIR/preferences.conf" || return 1
     local k
     for k in "$SRC_DIR"/bundles/*.kawall; do
         [[ -f "$k" ]] && { install -m 644 "$k" "$PAYLOAD_DIR/bundles/" || return 1; }
@@ -1091,9 +1113,10 @@ summary() {
     note "Servico systemd:   ${RESULT[service]:-?}$( [[ -f "$UNIT_PATH" ]] && { service_enabled && echo ", habilitado" || echo ", desabilitado"; })"
     echo
     if [[ -x "$BIN_PATH" ]]; then
+        note "Preferencias: $(raw_path "$PREFS") (edite e rode: sudo kawaii-arch-manager --reload-confs)"
         note "Gerencie com: kawaii-arch-manager --status | --list-bundles | --set-mode | --randomize"
     else
-        note "Sem o manager, o tema usa o wallpaper atual; configure editando $(raw_path "$BG_CONF")."
+        note "Sem o manager, o tema usa o wallpaper atual. Preferencias: $(raw_path "$PREFS")."
     fi
     info "Pronto!"
 }
@@ -1120,7 +1143,7 @@ plan_fresh() {
     [[ -d "$THEME_DIR" || -e "$BIN_PATH" || -d "$SHARE_DIR" || -f "$HELPER_PATH" || -f "$UNIT_PATH" || -d "$DATA_DIR" ]] && any=1
     if ((!any)); then
         note "Nada instalado; equivale a uma instalacao normal."
-        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha configuracao de wallpapers a manter."
+        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha preferencias a manter."
         return 0
     fi
 
@@ -1146,7 +1169,7 @@ plan_fresh() {
     local i id
     for i in "${items[@]}"; do note " - $i"; done
     if ((KEEP_CONFIG)); then
-        note "Mantido: configuracao de wallpapers ($(describe_bg_config)), estado da rotacao${KEEP_BUNDLES[*]:+ e o(s) bundle(s) importado(s) ${KEEP_BUNDLES[*]}}."
+        note "Mantido: preferencias ($(describe_bg_config)), estado da rotacao${KEEP_BUNDLES[*]:+ e o(s) bundle(s) importado(s) ${KEEP_BUNDLES[*]}}."
     fi
     while IFS= read -r id; do
         [[ " ${PKG_BUNDLES[*]} " == *" $id "* || " ${KEEP_BUNDLES[*]} " == *" $id "* ]] || lost+=("$id")
@@ -1161,18 +1184,18 @@ plan_fresh() {
     return 0
 }
 
-# --- Configuracao de wallpapers mantida no --fresh --------------------
-# Mantidos: backgrounds.conf (MODE, SELECTED_BUNDLE, SELECTED_BACKGROUND),
+# --- Preferencias mantidas no --fresh ---------------------------------
+# Mantidos: preferences.conf (wallpaper, logo, contorno do menu, tom),
 # state/last-background (evita repetir o ultimo wallpaper), o wallpaper
 # ativo e, se a configuracao apontar para um bundle importado (fora do
 # pacote), esse bundle. paths.conf e sempre regenerado.
 
 describe_bg_config() {
     local mode sel
-    mode="$(conf_get "$BG_CONF" MODE || true)"
+    mode="$(conf_get "$PREFS" MODE || true)"
     case "$mode" in
-        fixed) sel="$(conf_get "$BG_CONF" SELECTED_BACKGROUND || true)"; echo "modo fixed, wallpaper fixo: ${sel:-nenhum}" ;;
-        set)   sel="$(conf_get "$BG_CONF" SELECTED_BUNDLE || true)"; echo "modo set, bundle: ${sel:-nenhum}" ;;
+        fixed) sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"; echo "modo fixed, wallpaper fixo: ${sel:-nenhum}" ;;
+        set)   sel="$(conf_get "$PREFS" SELECTED_BUNDLE || true)"; echo "modo set, bundle: ${sel:-nenhum}" ;;
         global|balanced) echo "modo $mode" ;;
         *)     echo "MODE=\"$mode\"" ;;
     esac
@@ -1181,11 +1204,11 @@ describe_bg_config() {
 # IDs de bundles de que a configuracao depende (modo set / fixed)
 config_bundle_refs() {
     local mode sel=""
-    mode="$(conf_get "$BG_CONF" MODE || true)"
+    mode="$(conf_get "$PREFS" MODE || true)"
     case "$mode" in
-        fixed) sel="$(conf_get "$BG_CONF" SELECTED_BACKGROUND || true)"
+        fixed) sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"
                [[ "$sel" == */* ]] && sel="${sel%%/*}" || sel="" ;;
-        set)   sel="$(conf_get "$BG_CONF" SELECTED_BUNDLE || true)" ;;
+        set)   sel="$(conf_get "$PREFS" SELECTED_BUNDLE || true)" ;;
     esac
     [[ -n "$sel" && "$sel" =~ $ID_RE ]] && echo "$sel"
     return 0
@@ -1193,9 +1216,9 @@ config_bundle_refs() {
 
 # Caminho do wallpaper fixo configurado ("" se o modo nao e fixed)
 fixed_background_path() {
-    [[ "$(conf_get "$BG_CONF" MODE || true)" == fixed ]] || return 0
+    [[ "$(conf_get "$PREFS" MODE || true)" == fixed ]] || return 0
     local sel id name
-    sel="$(conf_get "$BG_CONF" SELECTED_BACKGROUND || true)"
+    sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"
     [[ "$sel" == */* ]] || return 0
     id="${sel%%/*}"; name="${sel#*/}"
     [[ "$id" =~ $ID_RE && "$name" =~ $IMG_RE ]] || return 0
@@ -1204,17 +1227,17 @@ fixed_background_path() {
 
 plan_keep_config() {
     KEEP_CONFIG=0; KEEP_REFS=(); KEEP_BUNDLES=()
-    if [[ ! -f "$BG_CONF" ]]; then
-        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha configuracao de wallpapers a manter."
+    if [[ ! -f "$PREFS" ]]; then
+        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha preferencias a manter."
         return 0
     fi
-    note "Configuracao de wallpapers atual: $(describe_bg_config)"
+    note "Preferencias atuais: $(describe_bg_config)"
     if [[ -n "$OPT_KEEP_CONFIG" ]]; then
         KEEP_CONFIG="$OPT_KEEP_CONFIG"
-    elif ask_yn "Manter a configuracao de wallpapers (modo de troca / wallpaper fixo) apos a reinstalacao?" S; then
+    elif ask_yn "Manter as preferencias (modo de troca / wallpaper fixo, logo, contorno, tom) apos a reinstalacao?" S; then
         KEEP_CONFIG=1
     fi
-    ((KEEP_CONFIG)) || { note "A configuracao sera recriada com os padroes (MODE=global)."; return 0; }
+    ((KEEP_CONFIG)) || { note "As preferencias serao recriadas com os padroes (MODE=global)."; return 0; }
 
     local ref
     while IFS= read -r ref; do
@@ -1234,7 +1257,7 @@ plan_keep_config() {
     if [[ -n "$f" ]]; then
         id="${f#"$BUNDLES_DIR/"}"; id="${id%%/*}"; src="$f"
         [[ " ${PKG_BUNDLES[*]} " == *" $id "* ]] && src="$SRC_BUNDLES/$id/backgrounds/${f##*/}"
-        png_ok "$src" || warn "o wallpaper fixo configurado ($(conf_get "$BG_CONF" SELECTED_BACKGROUND)) nao existe ou e invalido; o helper usara o fallback ate voce escolher outro"
+        png_ok "$src" || warn "o wallpaper fixo configurado ($(conf_get "$PREFS" SELECTED_BACKGROUND)) nao existe ou e invalido; o helper usara o fallback ate voce escolher outro"
     fi
     return 0
 }
@@ -1242,8 +1265,8 @@ plan_keep_config() {
 # Avisa onde estao os dados guardados se o instalador terminar no meio
 keep_exit_report() {
     [[ -n "$KEEP_DIR" && -d "$KEEP_DIR" ]] || return 0
-    warn "a configuracao de wallpapers mantida ficou guardada em $(raw_path "$KEEP_DIR")"
-    note "Restaure manualmente: backgrounds.conf -> $(raw_path "$BG_CONF"), last-background -> $(raw_path "$STATE_DIR")/,"
+    warn "as preferencias mantidas ficaram guardadas em $(raw_path "$KEEP_DIR")"
+    note "Restaure manualmente: preferences.conf -> $(raw_path "$PREFS"), last-background -> $(raw_path "$STATE_DIR")/,"
     note "bundles/<id> -> $(raw_path "$BUNDLES_DIR")/ e background.png -> $THEME_RAW/"
 }
 
@@ -1254,7 +1277,7 @@ stash_config() {
     rm -rf "$KEEP_DIR"
     mkdir -m 700 -p "$KEEP_DIR/bundles" || die "falha ao criar $(raw_path "$KEEP_DIR"); nada foi apagado"
     trap keep_exit_report EXIT
-    cp -p -- "$BG_CONF" "$KEEP_DIR/backgrounds.conf" || { rm -rf "$KEEP_DIR"; KEEP_DIR=""; die "falha ao guardar $(raw_path "$BG_CONF"); nada foi apagado"; }
+    cp -p -- "$PREFS" "$KEEP_DIR/preferences.conf" || { rm -rf "$KEEP_DIR"; KEEP_DIR=""; die "falha ao guardar $(raw_path "$PREFS"); nada foi apagado"; }
     [[ -f "$STATE_DIR/last-background" ]] && { cp -p -- "$STATE_DIR/last-background" "$KEEP_DIR/" || true; }
     png_ok "$THEME_DIR/background.png" && { cp --no-preserve=all -- "$THEME_DIR/background.png" "$KEEP_DIR/background.png" || true; }
     local id moved=()
@@ -1277,11 +1300,11 @@ restore_config() {
         mv -- "$KEEP_DIR/bundles/$id" "$BUNDLES_DIR/$id" || die "falha ao restaurar o bundle '$id'"
         info "Bundle '$id' mantido"
     done
-    write_atomic "$BG_CONF" 644 < "$KEEP_DIR/backgrounds.conf" || die "falha ao restaurar $(raw_path "$BG_CONF")"
+    write_atomic "$PREFS" 644 < "$KEEP_DIR/preferences.conf" || die "falha ao restaurar $(raw_path "$PREFS")"
     if [[ -f "$KEEP_DIR/last-background" ]]; then
         write_atomic "$STATE_DIR/last-background" 644 < "$KEEP_DIR/last-background" || warn "estado da rotacao nao restaurado"
     fi
-    info "Configuracao de wallpapers mantida: $(describe_bg_config)"
+    info "Preferencias mantidas: $(describe_bg_config)"
 }
 
 # Descarta a guarda temporaria (depois que o tema ja usou o wallpaper guardado)
@@ -1298,7 +1321,7 @@ fresh_wipe() {
     remove_installation
     rm -rf "$DATA_DIR"
     if ((KEEP_CONFIG)); then
-        info "Instalacao anterior removida (tema, componentes e bundles); configuracao de wallpapers guardada"
+        info "Instalacao anterior removida (tema, componentes e bundles); preferencias guardadas"
     else
         info "Instalacao anterior removida (tema, componentes, bundles, configuracao e estado)"
     fi
@@ -1315,7 +1338,7 @@ do_install() {
     install_bundles
     install_theme
     finish_keep
-    setup_bg_config
+    setup_prefs
     install_components
     apply_theme_tone
     setup_default_grub

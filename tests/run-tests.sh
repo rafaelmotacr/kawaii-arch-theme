@@ -108,7 +108,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.3.0' ]]"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.4.0' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -240,8 +240,8 @@ expect_rc 3 "rejeita arquivo corrompido" "$MGR" --import-bundle "$T/lixo.kawall"
 expect_rc 2 "rejeita caminho inexistente" "$MGR" --import-bundle "$T/nao-existe.kawall"
 
 section "Configuracao e modos (manager sem helper)"
-rm -f "$DATA/config/backgrounds.conf"
-printf 'MODE="set"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
+rm -f "$DATA/config/preferences.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND=""\n' > "$DATA/config/preferences.conf"
 expect_rc 4 "modo set sem bundle selecionado" "$MGR" --set-mode set
 expect_rc 3 "set-bundle inexistente" "$MGR" --set-bundle nada
 expect_rc 0 "set-bundle gothic" "$MGR" --set-bundle gothic
@@ -253,7 +253,7 @@ prev=""; rep=0
 for i in $(seq 15); do "$MGR" --randomize >/dev/null 2>&1; cur="$(cat "$DATA/state/last-background")"; [[ "$cur" == "$prev" ]] && rep=1; prev="$cur"; done
 check "nao repete a ultima imagem (15 sorteios, manager)" test "$rep" = 0
 expect_rc 0 "set-background angelic/background1" "$MGR" --set-background angelic/background1
-check "modo fixed aplicado imediatamente" bash -c "cmp -s '$DATA/bundles/angelic/backgrounds/background1.png' '$THEME/background.png' && grep -q 'MODE=\"fixed\"' '$DATA/config/backgrounds.conf'"
+check "modo fixed aplicado imediatamente" bash -c "cmp -s '$DATA/bundles/angelic/backgrounds/background1.png' '$THEME/background.png' && grep -q 'MODE=\"fixed\"' '$DATA/config/preferences.conf'"
 expect_rc 3 "set-background arquivo inexistente" "$MGR" --set-background angelic/background9.png
 expect_rc 4 "remocao do bundle selecionado e bloqueada" "$MGR" --yes --remove-bundle angelic
 expect_rc 6 "remocao cancelada sem confirmacao" bash -c "echo n | script -qec '$MGR --remove-bundle big' /dev/null"
@@ -262,9 +262,9 @@ expect_rc 0 "--status sem helper/servico" "$MGR" --status
 section "Background Helper"
 expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
 expect_rc 0 "--install-helper" "$MGR" --install-helper
-check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.1.1 ]]"
+check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.2.0 ]]"
 expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
-printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/preferences.conf"
 prev=""; rep=0
 for i in $(seq 15); do "$HELPER" -q || bad "helper rc=$?"; cur="$(cat "$DATA/state/last-background")"; [[ "$cur" == "$prev" ]] && rep=1; prev="$cur"; done
 check "helper: modo set sem repeticao (15 sorteios)" test "$rep" = 0
@@ -275,30 +275,30 @@ check "sem background.png.tmp residual" test ! -e "$THEME/background.png.tmp"
 rm -f "$DATA/state/last-background"
 N=700
 dist() { local i; for ((i = 0; i < N; i++)); do "$HELPER" --dry-run; done | sort | uniq -c; }
-printf 'MODE="global"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="global"\n' > "$DATA/config/preferences.conf"
 g="$(dist)"
 check "global: 15 imagens elegiveis" test "$(wc -l <<< "$g")" = 15
 check "global: probabilidade por imagem (angelic ~1/15, nao ~1/3)" bash -c "c=\$(awk '/angelic/{print \$1}' <<< '$g'); (( c > 15 && c < 100 ))"
-printf 'MODE="balanced"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="balanced"\n' > "$DATA/config/preferences.conf"
 bl="$(dist)"
 check "balanced: angelic (1 imagem) recebe ~1/3 dos sorteios" bash -c "c=\$(awk '/angelic/{print \$1}' <<< '$bl'); (( c > 170 && c < 300 ))"
 check "balanced: big (10 imagens) recebe ~1/3 no total" bash -c "c=\$(awk '/big\\//{s+=\$1} END{print s}' <<< '$bl'); (( c > 170 && c < 300 ))"
 
 section "Falhas preservam o wallpaper valido"
-printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/preferences.conf"
 "$HELPER" -q; cp "$THEME/background.png" "$T/before.png"
-printf 'MODE="set"\nSELECTED_BUNDLE="removido"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="removido"\n' > "$DATA/config/preferences.conf"
 expect_rc 3 "bundle selecionado ausente -> erro de configuracao" "$HELPER"
 check "  wallpaper anterior preservado" cmp -s "$T/before.png" "$THEME/background.png"
-printf 'MODE="xyz"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="xyz"\n' > "$DATA/config/preferences.conf"
 expect_rc 3 "modo invalido" "$HELPER"
 check "  wallpaper anterior preservado" cmp -s "$T/before.png" "$THEME/background.png"
-printf 'MODE="fixed"\nSELECTED_BACKGROUND="gothic/../../etc/passwd"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="fixed"\nSELECTED_BACKGROUND="gothic/../../etc/passwd"\n' > "$DATA/config/preferences.conf"
 expect_rc 3 "SELECTED_BACKGROUND com traversal e rejeitado" "$HELPER"
 rm -f "$THEME/background.png"
 expect_rc 3 "sem selecao valida e sem background.png -> fallback.png" "$HELPER"
 check "  fallback.png aplicado" cmp -s "$THEME/fallback.png" "$THEME/background.png"
-printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/preferences.conf"
 cp "$THEME/background.png" "$T/before.png"
 sed -i 's|^EXPECTED_MOUNT=.*|EXPECTED_MOUNT="/particao-nao-montada"|' "$DATA/config/paths.conf"
 expect_rc 5 "particao esperada nao montada -> nao escreve" "$HELPER"
@@ -319,7 +319,7 @@ if unshare -rm true 2>/dev/null; then
         unshare -rm bash -c "mount --bind '$THEME' '$THEME' && mv '$HELPER' '$HELPER.off'; KAWAII_ROOT='$R' KAWAII_SKIP_ROOT_CHECK=1 '$MGR' --randomize; rc=\$?; mv '$HELPER.off' '$HELPER'; exit \$rc"
 fi
 check "troca de wallpaper nunca executa grub-mkconfig" test ! -e "$T/grub-mkconfig.log"
-check "theme.txt de tema sem tones/ (antigo) nao e alterado" cmp -s "$PKG/grub-theme/theme.txt" "$THEME/theme.txt"
+check "tema incompleto (sem tones/): theme.txt intacto" cmp -s "$PKG/grub-theme/theme.txt" "$THEME/theme.txt"
 expect_rc 0 "helper funciona sem o manager no PATH" env -i PATH=/usr/bin:/bin KAWAII_ROOT="$R" "$HELPER" -q
 
 section "Servico systemd"
@@ -339,7 +339,7 @@ expect_rc 0 "--disable-service" "$MGR" --disable-service
 expect_rc 0 "--update (nada a fazer)" "$MGR" --yes --update
 expect_rc 0 "--uninstall service" "$MGR" --yes --uninstall service
 expect_rc 0 "--uninstall helper" "$MGR" --yes --uninstall helper
-check "bundles e configuracao preservados" bash -c "[[ -d '$DATA/bundles/gothic' && -f '$DATA/config/backgrounds.conf' ]]"
+check "bundles e configuracao preservados" bash -c "[[ -d '$DATA/bundles/gothic' && -f '$DATA/config/preferences.conf' ]]"
 expect_rc 0 "--remove-bundle big" "$MGR" --yes --remove-bundle big
 check "bundle removido" test ! -e "$DATA/bundles/big"
 if command -v systemd-analyze >/dev/null; then
@@ -352,7 +352,7 @@ unset KAWAII_ROOT
 # Pacote de teste: copia do pacote com bundles sinteticos (os bundles reais
 # nao fazem parte do repositorio)
 PKGT="$T/pkg"; mkdir -p "$PKGT"
-cp -r "$PKG/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$PKG/tools" "$PKGT/"
+cp -r "$PKG/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$PKG/tools" "$PKG/config" "$PKGT/"
 rm -rf "$PKGT/manager/build" "$PKGT/manager/out"
 mkbundle "$PKGT/bundles/alpha" alpha 1.0.0 3 Alpha
 mkbundle "$PKGT/bundles/beta" beta 1.0.0 2 Beta
@@ -409,7 +409,7 @@ cp "$TS/white.png" "$TD/bundles/tons/backgrounds/claro.png"
 cp "$TS/black.png" "$TD/bundles/tons/backgrounds/escuro.png"
 printf 'ID=arch\n' > "$R2/etc/os-release"
 H2="$PKG/helper/grub-random-bg.sh"
-fixed() { printf 'MODE="fixed"\nSELECTED_BACKGROUND="tons/%s"\n' "$1" > "$TD/config/backgrounds.conf"; }
+fixed() { printf 'MODE="fixed"\nSELECTED_BACKGROUND="tons/%s"\n' "$1" > "$TD/config/preferences.conf"; }
 logo_of() { sed -n -E 's/^[^#]*file[[:space:]]*=[[:space:]]*"logos\/([^"]+)".*/\1/p' "$TT/theme.txt"; }
 same_icons() { local f; for f in "$PKG/grub-theme/icon-sets/$1"/*.png; do cmp -s "$f" "$TT/icons/${f##*/}" || return 1; done; }
 
@@ -516,6 +516,74 @@ cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
 check "sem temporarios no tema" bash -c "! find '$TT' -name '*.tmp*' | grep -q ."
 export KAWAII_ROOT="$R"
 
+section "Preferencias (preferences.conf) e --reload-confs"
+export KAWAII_ROOT="$R2"
+PF="$TD/config/preferences.conf"
+cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+cp "$PKG/config/preferences.conf" "$PF"
+ncom() { grep -c '^#' "$PF"; }
+com_before="$(ncom)"
+check "modelo do pacote: todas as chaves e valores padrao" bash -c "for kv in 'MODE=\"global\"' 'LOGO=\"on\"' 'MENU_BOX=\"on\"' 'TONE=\"auto\"' 'SELECTED_BUNDLE=\"\"' 'SELECTED_BACKGROUND=\"\"'; do grep -qx \"\$kv\" '$PF' || exit 1; done"
+expect_rc 0 "--set-background grava no preferences.conf" "$MGR" --set-background tons/claro.png
+check "  MODE e SELECTED_BACKGROUND gravados no lugar" bash -c "grep -qx 'MODE=\"fixed\"' '$PF' && grep -qx 'SELECTED_BACKGROUND=\"tons/claro.png\"' '$PF'"
+check "  comentarios do arquivo preservados" test "$(ncom)" = "$com_before"
+check "  nenhum backgrounds.conf criado" test ! -e "$TD/config/backgrounds.conf"
+expect_rc 0 "--logo off grava LOGO=\"off\"" "$MGR" --logo off
+check "  LOGO=\"off\" e logo desligado no tema" bash -c "grep -qx 'LOGO=\"off\"' '$PF' && grep -q '^#\[logo\] + image' '$TT/theme.txt'"
+expect_rc 0 "--logo on" "$MGR" --logo on
+check "  so as linhas alteradas diferem do modelo" test "$(diff "$PKG/config/preferences.conf" "$PF" | grep -c '^>')" = 2
+echo 'CHAVE_EXTRA="x"' >> "$PF"
+expect_rc 0 "--menu-box off com chave desconhecida no arquivo" "$MGR" --menu-box off
+check "  chave desconhecida mantida e MENU_BOX gravado" bash -c "grep -qx 'CHAVE_EXTRA=\"x\"' '$PF' && grep -qx 'MENU_BOX=\"off\"' '$PF'"
+"$MGR" --menu-box on >/dev/null 2>&1
+
+# Edicao manual + --reload-confs
+sed -i 's/^LOGO=.*/LOGO="off"/; s/^MENU_BOX=.*/MENU_BOX="off"/' "$PF"
+check "--status avisa que o tema difere das preferencias" bash -c "'$MGR' --status | grep -q 'reload-confs'"
+cp "$TT/theme.txt" "$T/theme.before"
+out="$("$MGR" --dry-run --reload-confs 2>&1)"; rc=$?
+check "--dry-run --reload-confs (rc=0) lista as mudancas" bash -c "[[ $rc == 0 ]] && grep -q 'Logo: ligado -> desligado' <<< \"\$1\" && grep -q 'Contorno do menu: ligado -> desligado' <<< \"\$1\"" _ "$out"
+check "  dry-run nao altera o tema" cmp -s "$T/theme.before" "$TT/theme.txt"
+out="$("$MGR" --reload-confs 2>&1)"; rc=$?
+check "--reload-confs aplica (rc=0) e avisa chave desconhecida" bash -c "[[ $rc == 0 ]] && grep -q 'chave desconhecida ignorada: CHAVE_EXTRA' <<< \"\$1\"" _ "$out"
+check "  logo e contorno desligados no theme.txt" bash -c "'$MGR' --status | grep -qE '^ +Logo +desligado' && '$MGR' --status | grep -qE '^ +Contorno do menu +desligado'"
+check "  --status sem pendencia" bash -c "! '$MGR' --status | grep -q 'Pendente'"
+ino="$(stat -c %i "$TT/theme.txt")"
+out="$("$MGR" --reload-confs 2>&1)"
+check "--reload-confs de novo: nada a fazer, theme.txt intacto" bash -c "grep -q 'nada a fazer' <<< \"\$1\" && [[ \$(stat -c %i '$TT/theme.txt') == $ino ]]" _ "$out"
+sed -i 's/^LOGO=.*/LOGO="on"/; s/^MENU_BOX=.*/MENU_BOX="talvez"/' "$PF"
+cp "$TT/theme.txt" "$T/theme.before"
+expect_rc 3 "valor invalido: --reload-confs recusa" "$MGR" --reload-confs
+check "  nada aplicado (nem o LOGO valido)" cmp -s "$T/theme.before" "$TT/theme.txt"
+sed -i 's/^MENU_BOX=.*/MENU_BOX="on"/; s/^MODE=.*/MODE="set"/; s/^SELECTED_BUNDLE=.*/SELECTED_BUNDLE="nao-existe"/' "$PF"
+expect_rc 3 "bundle inexistente no modo set: recusa" "$MGR" --reload-confs
+check "  nada aplicado" cmp -s "$T/theme.before" "$TT/theme.txt"
+sed -i 's/^MODE=.*/MODE="fixed"/; s/^SELECTED_BUNDLE=.*/SELECTED_BUNDLE=""/; s/^SELECTED_BACKGROUND=.*/SELECTED_BACKGROUND="tons\/escuro.png"/' "$PF"
+expect_rc 0 "modo fixed editado: --reload-confs" "$MGR" --reload-confs
+check "  wallpaper fixo aplicado e tom dark" bash -c "cmp -s '$TS/black.png' '$TT/background.png' && [[ \$(cat '$TT/icons/.tone') == dark ]]"
+check "  logo e contorno religados" cmp -s "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+sed -i 's/^TONE=.*/TONE="light"/' "$PF"
+out="$("$MGR" --reload-confs 2>&1)"
+check "TONE=light forca o tom num wallpaper escuro" bash -c "[[ \$(cat '$TT/icons/.tone') == light ]] && grep -q 'Tom: dark -> light' <<< \"\$1\"" _ "$out"
+"$H2" -q
+check "  o helper tambem respeita TONE" bash -c "[[ \$(cat '$TT/icons/.tone') == light ]]"
+sed -i 's/^TONE=.*/TONE="auto"/' "$PF"
+"$MGR" --reload-confs >/dev/null 2>&1
+check "TONE=auto volta a medir (dark)" bash -c "[[ \$(cat '$TT/icons/.tone') == dark ]]"
+sed -i 's/^MODE=.*/MODE="global"/' "$PF"
+sha_bg="$(sha256sum < "$TT/background.png")"
+expect_rc 0 "modo global: --reload-confs" "$MGR" --reload-confs
+check "  global nao sorteia um wallpaper novo" test "$sha_bg" = "$(sha256sum < "$TT/background.png")"
+mv "$PF" "$T/prefs.off"
+expect_rc 3 "sem preferences.conf: --reload-confs recusa" "$MGR" --reload-confs
+expect_rc 3 "sem preferences.conf: helper da erro de configuracao" "$H2" -q
+mv "$T/prefs.off" "$PF"
+if ((EUID != 0)); then
+    expect_rc 5 "--reload-confs exige root" env -u KAWAII_SKIP_ROOT_CHECK "$MGR" --reload-confs
+fi
+cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+export KAWAII_ROOT="$R"
+
 section "Instalador: instalacao completa"
 L="$T/full-root"
 LT="$L/boot/grub/themes/kawaii-arch-theme"
@@ -531,8 +599,10 @@ check "--yes instala todos os bundles do pacote" bash -c "[[ \"\$(cd '$PKGT/bund
 check "theme.txt aponta para background.png" grep -qx 'desktop-image: "background.png"' "$LT/theme.txt"
 check "fallback.png instalado" test -f "$LT/fallback.png"
 check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundles/*/backgrounds/*.png; do cmp -s \"\$f\" '$LT/background.png' && exit 0; done; exit 1"
-check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.3.0' ]]"
+check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
+check "preferences.conf criado a partir do modelo comentado" bash -c "grep -q 'reload-confs' '$LD/config/preferences.conf' && grep -qx 'LOGO=\"on\"' '$LD/config/preferences.conf' && grep -qx 'MENU_BOX=\"on\"' '$LD/config/preferences.conf'"
+check "modelo das preferencias no payload" cmp -s "$PKG/config/preferences.conf" "$L/usr/share/kawaii-arch-manager/payload/preferences.conf"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.4.0' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"
@@ -565,6 +635,7 @@ lmenu() { sed -n '/^+ boot_menu/,/^}/p' "$LT/theme.txt" | grep -v '^[[:space:]]*
 check "contorno ligado por padrao" test "$(lmenu)" = 1
 expect_rc 0 "--no-menu-box" "$PKGT/install.sh" --yes --no-menu-box
 check "  contorno desligado" test "$(lmenu)" = 0
+check "  MENU_BOX=\"off\" gravado nas preferencias" grep -qx 'MENU_BOX="off"' "$LD/config/preferences.conf"
 check "  limites originais ativos" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -qx '  width = 490'"
 sha_before="$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 expect_rc 0 "nova execucao sem a opcao preserva o estado" "$PKGT/install.sh" --yes
@@ -572,6 +643,11 @@ check "  nada alterado (idempotente)" test "$sha_before" = "$(cd "$L" && find . 
 echo 1.9.0 > "$LT/VERSION"
 expect_rc 0 "atualizacao do tema" "$PKGT/install.sh" --yes
 check "  atualizacao preserva o contorno desligado" test "$(lmenu)" = 0
+sed -i 's/^LOGO=.*/LOGO="off"/' "$LD/config/preferences.conf"
+expect_rc 0 "LOGO=\"off\" editado: o instalador segue as preferencias" "$PKGT/install.sh" --yes
+check "  logo desligado no tema" bash -c "! sed -n '/^# >>> logo/,/^# <<< logo/p' '$LT/theme.txt' | grep -q '^+ image'"
+expect_rc 0 "--logo religa e grava" "$PKGT/install.sh" --yes --logo
+check "  LOGO=\"on\"" grep -qx 'LOGO="on"' "$LD/config/preferences.conf"
 if command -v script >/dev/null; then
     out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --bundles all --no-components" /dev/null 2>&1)"
     check "pergunta sobre o contorno no modo interativo (padrao: estado atual)" grep -q 'contorno de vidro em volta do menu de boot? \[s/N\]' <<< "$out"
@@ -579,7 +655,7 @@ fi
 
 section "Instalador: instalacao limpa (--fresh)"
 "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
-printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/preferences.conf"
 echo 'gothic/background1.png' > "$LD/state/last-background"
 echo '# personalizado' >> "$LT/theme.txt"
 touch "$T/systemctl.enabled"
@@ -595,7 +671,7 @@ check "--fresh --yes --no-keep-config (rc=0)" test "$rc" = 0
 check "--fresh volta o contorno do menu ao padrao (ligado)" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -v '^[[:space:]]*#' | grep -q menu_pixmap_style"
 check "avisa que o bundle fora do pacote sera perdido" grep -q 'serao perdidos: noname' <<< "$out"
 check "bundles = exatamente os do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
-check "configuracao recriada com os padroes (MODE=global)" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
+check "configuracao recriada com os padroes (MODE=global)" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
 check "estado anterior apagado" test ! -e "$LD/state/last-background"
 check "theme.txt igual ao do pacote (personalizacao descartada)" bash -c "! grep -q '^# personalizado' '$LT/theme.txt'"
 check "componentes reinstalados" bash -c "[[ -x '$L/usr/bin/kawaii-arch-manager' && -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
@@ -605,20 +681,20 @@ check "sem diretorios temporarios restantes" bash -c "! ls -A '$LD/bundles' '$L/
 expect_rc 0 "--fresh --yes --enable-service" "$PKGT/install.sh" --fresh --yes --enable-service
 check "servico habilitado com --enable-service" test -e "$T/systemctl.enabled"
 
-section "Instalador: --fresh mantendo a configuracao de wallpapers"
+section "Instalador: --fresh mantendo as preferencias"
 expect_rc 1 "--keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --keep-config
 expect_rc 1 "--no-keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --no-keep-config
 # modo set apontando para um bundle importado (fora do pacote)
 "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
-printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/backgrounds.conf"
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\nLOGO="on"\nMENU_BOX="on"\nTONE="auto"\n' > "$LD/config/preferences.conf"
 echo 'noname/background1.png' > "$LD/state/last-background"
 cp "$LD/bundles/noname/backgrounds/background1.png" "$LT/background.png"
-conf_before="$(sha256sum < "$LD/config/backgrounds.conf")"
+conf_before="$(sha256sum < "$LD/config/preferences.conf")"
 bg_before="$(sha256sum < "$LT/background.png")"
 nn_before="$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
 check "--fresh --yes mantem a configuracao por padrao (rc=0)" test "$rc" = 0
-check "backgrounds.conf identico ao anterior" test "$conf_before" = "$(sha256sum < "$LD/config/backgrounds.conf")"
+check "preferences.conf identico ao anterior" test "$conf_before" = "$(sha256sum < "$LD/config/preferences.conf")"
 check "estado da rotacao mantido" grep -qx 'noname/background1.png' "$LD/state/last-background"
 check "bundle importado usado pela configuracao foi mantido" test "$nn_before" = "$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 check "bundle mantido nao e anunciado como perdido" bash -c "! grep -q 'serao perdidos' <<< \"\$1\"" _ "$out"
@@ -630,21 +706,21 @@ check "helper funciona com a configuracao mantida" env KAWAII_ROOT="$L" "$L/usr/
 fx_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | head -n1)"
 other_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | tail -n1)"
 fx_img="$(cd "$PKGT/bundles/$fx_id/backgrounds" && ls *.png | sort | tail -n1)"
-printf 'MODE="fixed"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND="%s/%s"\n' "$fx_id" "$fx_img" > "$LD/config/backgrounds.conf"
+printf 'MODE="fixed"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND="%s/%s"\n' "$fx_id" "$fx_img" > "$LD/config/preferences.conf"
 cp "$PKGT/bundles/$other_id/backgrounds/$(cd "$PKGT/bundles/$other_id/backgrounds" && ls *.png | head -n1)" "$LT/background.png"
 out="$("$PKGT/install.sh" --fresh --yes --keep-config --no-components --bundles "$other_id" 2>&1)"; rc=$?
 check "--fresh --keep-config --bundles $other_id (rc=0)" test "$rc" = 0
 check "bundle do wallpaper fixo incluido automaticamente" bash -c "[[ -d '$LD/bundles/$fx_id' && -d '$LD/bundles/$other_id' ]]"
 check "inclusao automatica e informada" grep -q "Bundle '$fx_id' incluido" <<< "$out"
 check "wallpaper ativo = wallpaper fixo configurado" cmp -s "$PKGT/bundles/$fx_id/backgrounds/$fx_img" "$LT/background.png"
-check "modo fixed mantido" grep -qx "SELECTED_BACKGROUND=\"$fx_id/$fx_img\"" "$LD/config/backgrounds.conf"
+check "modo fixed mantido" grep -qx "SELECTED_BACKGROUND=\"$fx_id/$fx_img\"" "$LD/config/preferences.conf"
 check "bundle importado nao referenciado foi apagado" test ! -e "$LD/bundles/noname"
 if command -v script >/dev/null; then
     out="$(printf 'n\ns\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
-    check "pergunta sobre manter a configuracao no --fresh interativo" grep -q 'Manter a configuracao de wallpapers' <<< "$out"
-    check "respondendo 'n', a configuracao volta ao padrao" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
+    check "pergunta sobre manter a configuracao no --fresh interativo" grep -q 'Manter as preferencias' <<< "$out"
+    check "respondendo 'n', a configuracao volta ao padrao" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
     out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
-    check "reinstalacao normal (sem --fresh) nao faz a pergunta" bash -c "! grep -q 'Manter a configuracao' <<< \"\$1\"" _ "$out"
+    check "reinstalacao normal (sem --fresh) nao faz a pergunta" bash -c "! grep -q 'Manter as preferencias' <<< \"\$1\"" _ "$out"
 fi
 
 expect_rc 0 "--uninstall --yes" "$PKGT/install.sh" --uninstall --yes
@@ -687,7 +763,7 @@ check "nada instalado apos a recusa" test ! -e "$K/boot/grub/themes/kawaii-arch-
 
 section "Instalador: pacote sem bundles"
 P2="$T/pkg-nobundles"; mkdir -p "$P2/bundles/quebrado/backgrounds"
-cp -r "$PKGT/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$P2/"
+cp -r "$PKGT/install.sh" "$PKG/grub-theme" "$PKG/helper" "$PKG/systemd" "$PKG/manager" "$PKG/config" "$P2/"
 printf 'ID="outro"\nVERSION="1.0.0"\n' > "$P2/bundles/quebrado/manifest.conf"
 mkpng "$P2/bundles/quebrado/backgrounds/background1.png"
 K="$T/nobundles-root"; mkdir -p "$K/boot/grub"

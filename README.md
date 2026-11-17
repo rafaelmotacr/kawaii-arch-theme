@@ -30,9 +30,9 @@ com imagens que você tenha direito de usar (ver
 
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
-| Tema GRUB | 3.1.0 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.3.0 | `/usr/bin/kawaii-arch-manager` | não |
-| Background Helper (bash) | 2.1.1 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
+| Tema GRUB | 3.1.1 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
+| Kawaii Arch Manager (C, binário nativo) | 1.4.0 | `/usr/bin/kawaii-arch-manager` | não |
+| Background Helper (bash) | 2.2.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
 
@@ -98,7 +98,7 @@ Opções:
 | `--menu-box` / `--no-menu-box` | exibe ou oculta o contorno de vidro em volta do menu de boot |
 | `--grub-dir DIR` | diretório do GRUB (padrão: detectado) |
 | `--fresh` | instalação limpa |
-| `--keep-config` / `--no-keep-config` | só com `--fresh`: mantém ou descarta a configuração de wallpapers |
+| `--keep-config` / `--no-keep-config` | só com `--fresh`: mantém ou descarta as preferências |
 | `--uninstall [--purge]` | remove o tema e os componentes |
 
 ### Reinstalação e atualização
@@ -110,9 +110,10 @@ Rodar o instalador de novo é seguro, porque ele é idempotente:
   maior que a instalada; o wallpaper ativo é preservado;
 - a unidade systemd só é reescrita quando o conteúdo muda, e só nesse caso
   roda `daemon-reload`;
-- `backgrounds.conf` e os bundles instalados nunca são sobrescritos;
-- as escolhas de logo e de contorno do menu são mantidas (só o `--fresh`
-  volta aos padrões);
+- `preferences.conf` e os bundles instalados nunca são sobrescritos; o
+  instalador só grava nele `LOGO` e `MENU_BOX` quando você passa
+  `--logo`/`--no-logo` ou `--menu-box`/`--no-menu-box`, ou responde às
+  perguntas (o padrão delas é o valor atual do arquivo);
 - `grub-mkconfig` só roda quando `/etc/default/grub` foi alterado, ou quando
   o `grub.cfg` não referencia o tema ou suas fontes. Trocar de wallpaper
   nunca exige isso.
@@ -125,8 +126,8 @@ Quando altera `/etc/default/grub`, o instalador salva um backup em
 Apaga tudo o que foi instalado e reinstala a partir da pasta do projeto, como
 numa máquina nova: tema (inclusive o wallpaper ativo e qualquer alteração no
 `theme.txt`), manager e payload, helper, unidade systemd e
-`/var/lib/kawaii-arch-manager` (bundles, `backgrounds.conf` e estado). A
-exceção é a configuração de wallpapers, se você escolher mantê-la.
+`/var/lib/kawaii-arch-manager` (bundles, `preferences.conf` e estado). A
+exceção são as preferências, se você escolher mantê-las.
 
 - Todas as perguntas e a confirmação vêm **antes** de apagar qualquer coisa.
   O instalador lista o que será removido e aponta os bundles instalados que
@@ -135,11 +136,11 @@ exceção é a configuração de wallpapers, se você escolher mantê-la.
   pastas deles de `/var/lib/kawaii-arch-manager/bundles/` para `bundles/`
   antes de rodar o `--fresh`. A confirmação é `[s/N]`; com `--yes`, o próprio
   `--fresh` vale como confirmação.
-- **Manter a configuração de wallpapers.** Se existir um `backgrounds.conf`,
-  o instalador mostra o modo atual e pergunta se ele deve ser mantido
+- **Manter as preferências.** Se existir um `preferences.conf`, o
+  instalador mostra o modo atual e pergunta se ele deve ser mantido
   (`[S/n]`; com `--yes`, mantém). Ao manter:
-  - `backgrounds.conf` (modo, bundle do modo `set`, wallpaper do modo `fixed`)
-    e `state/last-background` voltam intactos; `paths.conf` é regenerado;
+  - `preferences.conf` (wallpaper, logo, contorno do menu e tom) e
+    `state/last-background` voltam intactos; `paths.conf` é regenerado;
   - o wallpaper ativo continua o mesmo; no modo `fixed`, é o wallpaper fixo
     escolhido;
   - se a configuração usa um bundle da pasta `bundles/` que não foi
@@ -147,7 +148,7 @@ exceção é a configuração de wallpapers, se você escolher mantê-la.
     esse bundle é preservado.
 
   `--keep-config` e `--no-keep-config` decidem sem perguntar. Se o
-  instalador falhar no meio, ele informa onde guardou a configuração.
+  instalador falhar no meio, ele informa onde guardou as preferências.
 - As demais perguntas usam os padrões de uma instalação nova: o serviço só
   volta habilitado com `--enable-service` ou se você escolher.
 - `/etc/default/grub` e `grub.cfg` são preservados.
@@ -243,6 +244,7 @@ sudo kawaii-arch-manager --set-bundle ID
 sudo kawaii-arch-manager --set-mode fixed|set|global|balanced
 sudo kawaii-arch-manager --set-background ID/arquivo.png
 sudo kawaii-arch-manager --randomize            aplica agora (via helper, ou seleção interna)
+sudo kawaii-arch-manager --reload-confs         aplica o preferences.conf editado à mão
 sudo kawaii-arch-manager --logo on|off          exibe ou oculta o logo da distribuição
 sudo kawaii-arch-manager --menu-box on|off      exibe ou oculta o contorno de vidro do menu
 sudo kawaii-arch-manager --update               helper, serviço e bundles a partir do payload local
@@ -253,7 +255,11 @@ sudo kawaii-arch-manager --uninstall service|helper|manager|data
 
 Opções globais: `--yes` (confirma automaticamente), `--force` (reinstala a
 mesma versão ou permite downgrade) e `--dry-run` (só valida ou simula; aceito
-por `--import-bundle`, `--randomize`, `--update`, `--logo` e `--menu-box`).
+por `--import-bundle`, `--randomize`, `--update`, `--logo`, `--menu-box` e
+`--reload-confs`).
+
+Os comandos que mudam uma escolha (`--set-*`, `--logo`, `--menu-box`)
+gravam no [`preferences.conf`](#preferências) e aplicam na hora.
 
 Os comandos de consulta funcionam como usuário comum. Operações de escrita
 exigem root e mostram o comando com `sudo`; o manager nunca se eleva sozinho.
@@ -271,15 +277,48 @@ dependência ausente, downgrade) · 5 sem privilégios ou partição indisponív
 6 cancelado pelo usuário. O helper usa os mesmos códigos de 0 a 5 (4 = lock
 ocupado).
 
-## Modos de seleção
+## Preferências
 
-A configuração fica em `/var/lib/kawaii-arch-manager/config/backgrounds.conf`:
+Todas as escolhas do usuário ficam num único arquivo comentado,
+`/var/lib/kawaii-arch-manager/config/preferences.conf` (o modelo é
+[`config/preferences.conf`](config/preferences.conf)). Ele é a fonte da
+verdade: o `theme.txt` e o wallpaper ativo são derivados dele.
 
 ```ini
-MODE="set"
-SELECTED_BUNDLE="meu-bundle"
-SELECTED_BACKGROUND=""        # ID/arquivo.png, usado no modo fixed
+MODE="global"              # fixed | set | global | balanced
+SELECTED_BUNDLE=""         # ID, usado no modo set
+SELECTED_BACKGROUND=""     # ID/arquivo.png, usado no modo fixed
+LOGO="on"                  # on | off
+MENU_BOX="on"              # on | off: contorno de vidro do menu
+TONE="auto"                # auto | dark | light
 ```
+
+Para mudar, edite o arquivo e aplique sem reinstalar:
+
+```bash
+sudo kawaii-arch-manager --dry-run --reload-confs   # só mostra o que mudaria
+sudo kawaii-arch-manager --reload-confs
+```
+
+O `--reload-confs`:
+- valida o arquivo inteiro antes de mudar qualquer coisa: um valor inválido,
+  ou um bundle/imagem ausente nos modos `set`/`fixed`, aborta sem aplicar
+  nada; chaves desconhecidas só geram aviso;
+- liga ou desliga o logo e o contorno no `theme.txt` (uma única escrita, só
+  se algo mudar);
+- aplica um wallpaper só quando o ativo não corresponde mais à configuração
+  (`fixed` com outra imagem, `set` com outro bundle); `global` e `balanced`
+  não sorteiam um novo (use `--randomize`);
+- reaplica o tom (`TONE`).
+
+Os comandos do manager e o instalador trocam só o valor da linha da chave:
+comentários, ordem e linhas extras são mantidos. O `--status` mostra os
+valores e avisa quando o tema difere do arquivo. O serviço systemd não fica
+aqui (use `--enable-service`/`--disable-service`).
+
+## Modos de seleção
+
+Definidos por `MODE` no [`preferences.conf`](#preferências):
 
 | Modo | Comportamento |
 |---|---|
@@ -349,10 +388,11 @@ nome de cada sistema), o logo da distribuição (opcional) e a barra de tempo
 - **Logo** (opcional, ligado por padrão): `--logo`/`--no-logo` no
   instalador ou `sudo kawaii-arch-manager --logo on|off`.
 
-Essas escolhas ficam no próprio `theme.txt`, em blocos marcados
-(`# >>> nome` ... `# <<< nome`; um bloco desligado tem as linhas com o
-prefixo `#[logo] ` ou `#[menu] `). O `--status` mostra o estado atual, e a
-mudança vale a partir do próximo boot.
+Essas escolhas ficam em `LOGO` e `MENU_BOX` no
+[`preferences.conf`](#preferências) e são aplicadas no `theme.txt`, em
+blocos marcados (`# >>> nome` ... `# <<< nome`; um bloco desligado tem as
+linhas com o prefixo `#[logo] ` ou `#[menu] `). A mudança vale a partir do
+próximo boot.
 
 Para ajustar o vidro (por exemplo, a opacidade), use
 [`tools/make_glass.py`](#ferramentas).
@@ -377,7 +417,9 @@ Como funciona:
 - **Medição:** `kawaii-arch-manager --tone ARQUIVO.png` decodifica o PNG e
   escolhe o tom que dá mais contraste médio ao texto. O helper e o
   instalador usam esse comando. Sem o manager, o tom é sempre `dark`, que é
-  o visual padrão do tema.
+  o visual padrão do tema. Para fixar um tom, use `TONE="dark"` ou
+  `TONE="light"` no [`preferences.conf`](#preferências) e rode
+  `--reload-confs`.
 - **Cores, bordas, seleção, barra e logo:** o helper reescreve só essas
   linhas do `theme.txt` (os caminhos `tones/dark/` ↔ `tones/light/`,
   `item_color`, `selected_item_color` e o arquivo do logo). As cores de
@@ -431,6 +473,7 @@ bundles/                        bundles locais para o instalador (ignorados pelo
                                 exceto bundles/README.md)
 helper/grub-random-bg.sh        Background Helper
 systemd/grub-random-bg.service.in   modelo da unidade (@THEME_DIR@)
+config/preferences.conf         modelo comentado das preferências do usuário
 manager/                        código-fonte C + Makefile do manager
 tools/make-kawall.sh            empacota a pasta de um bundle em .kawall
 tools/make_glass.py             extra: regenera as molduras liquid glass
@@ -438,6 +481,7 @@ tools/make_light_assets.py      extra: gera seleção, barra e ícones do tom li
 tests/run-tests.sh              testes em sandbox (não exigem root)
 licenses/                       textos das licenças de terceiros (OFL)
 AGENTS.md                       contexto do projeto para agentes e colaboradores
+RULES.md                        regras de desenvolvimento do projeto
 ```
 
 ### Testes
@@ -500,6 +544,7 @@ padrão do pacote).
 | `manager/src/` | versão do manager | `VERSION` no `manager/Makefile`, a tabela e os testes que conferem `--version` |
 | `helper/grub-random-bg.sh` | versão do helper | `VERSION="..."` no script, a tabela e o teste `helper --version` |
 | `systemd/grub-random-bg.service.in` | revisão da unidade | a tabela |
+| `config/preferences.conf` (chaves) | manager, helper e instalador juntos | ver `RULES.md` (sem compatibilidade) |
 | imagens ou manifesto de um bundle | versão do bundle | `VERSION` no `manifest.conf` |
 
 Use SemVer: patch para correções e ajustes, minor para funções ou recursos

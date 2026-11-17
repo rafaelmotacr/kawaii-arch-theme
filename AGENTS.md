@@ -3,6 +3,8 @@
 Guia para agentes de código e colaboradores. Ele resume a especificação
 original (que não é publicada) e as decisões tomadas depois dela. Leia antes
 de alterar qualquer coisa; o [`README.md`](README.md) é a documentação de uso.
+As regras de desenvolvimento (por exemplo, **sem compatibilidade com versões
+anteriores**) estão em [`RULES.md`](RULES.md).
 
 ## 1. O que é
 
@@ -19,8 +21,9 @@ script" para um sistema modular:
 | Serviço | `grub-random-bg.service`, oneshot no boot | `systemd/*.in` → `/usr/lib/systemd/system/` |
 | Bundle | coleção de wallpapers: `manifest.conf` + `backgrounds/*.png` | `bundles/<id>/` (local, não versionado) → `/var/lib/kawaii-arch-manager/bundles/<id>/` |
 | `.kawall` | tar de um bundle, com raiz `<id>/` | gerado por `tools/make-kawall.sh` |
-| Payload | cópia local do helper, do modelo da unidade e dos `.kawall` de `bundles/`, usada pelo manager para instalar/atualizar | `/usr/share/kawaii-arch-manager/payload/` |
-| Dados | `config/backgrounds.conf` (preferências), `config/paths.conf` (caminhos, gerado), `state/last-background`, locks | `/var/lib/kawaii-arch-manager/` |
+| Payload | cópia local do helper, do modelo da unidade, do modelo `preferences.conf` e dos `.kawall` de `bundles/`, usada pelo manager para instalar/atualizar | `/usr/share/kawaii-arch-manager/payload/` |
+| Preferências | `preferences.conf`: MODE, SELECTED_BUNDLE, SELECTED_BACKGROUND, LOGO, MENU_BOX, TONE; **fonte da verdade** (o `theme.txt` é derivado) | `config/preferences.conf` (modelo comentado) → `/var/lib/kawaii-arch-manager/config/` |
+| Dados | `config/preferences.conf`, `config/paths.conf` (caminhos, gerado), `state/last-background`, locks | `/var/lib/kawaii-arch-manager/` |
 
 ## 2. Regras que não podem ser quebradas
 
@@ -53,7 +56,7 @@ Herdadas da especificação original (e cobertas pelos testes):
 9. **SemVer independente por componente, sem downgrade automático.** Versão
    inválida conta como `0.0.0`.
 10. **Preservar dados do usuário:** atualizar ou reinstalar não apaga bundles
-    nem `backgrounds.conf`. Só `--fresh` (com confirmação) e
+    nem `preferences.conf`. Só `--fresh` (com confirmação) e
     `--uninstall --purge` apagam dados.
 11. **Instalador idempotente:** uma segunda execução não altera nada sem
     motivo, não roda `daemon-reload` sem necessidade e não muda o estado do
@@ -79,7 +82,7 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
    todos.
 2. **`--fresh` com `--keep-config` / `--no-keep-config`** (tema 2.1.0).
    Pergunta feita **só** no `--fresh` (as outras execuções já preservam a
-   configuração), com padrão "sim". Mantém `backgrounds.conf`,
+   configuração), com padrão "sim". Mantém o arquivo de preferências (hoje `preferences.conf`),
    `last-background` e o wallpaper ativo (no modo `fixed`, a imagem fixa).
    Inclui automaticamente o bundle de `bundles/` usado pela configuração e
    preserva o bundle importado de que ela depende. Os dados ficam numa
@@ -159,12 +162,33 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      ativo; o outro tem as linhas com o prefixo `#[menu] ` na coluna 0. O
      GRUB aceita comentários dentro de componentes (`read_object` em
      `theme_loader.c`). O logo usa o mesmo esquema (`#[logo] `).
-   - Estado só no `theme.txt`. O instalador o lê (`menu_state`,
-     `logo_state`) e o mantém em reinstalações e atualizações; o `--fresh`
-     volta a ligado. As funções genéricas são `block_has`, `block_active` e
+   - Estado originalmente só no `theme.txt` (desde o item 8, vem de
+     `LOGO`/`MENU_BOX` no `preferences.conf`). As funções genéricas são `block_has`, `block_active` e
      `block_set` no `install.sh` e `manager/src/layout.c` no manager.
    - O helper atualiza o tom também nas linhas `#[menu] `, para o contorno
      religar no tom certo.
+8. **Preferências centralizadas** (tema 3.1.1, manager 1.4.0, helper 2.2.0).
+   Todas as escolhas do usuário ficam em
+   `/var/lib/kawaii-arch-manager/config/preferences.conf` (substitui o
+   `backgrounds.conf`, sem migração: ver `RULES.md`). O serviço fica fora.
+   - Chaves: `MODE`, `SELECTED_BUNDLE`, `SELECTED_BACKGROUND`, `LOGO`,
+     `MENU_BOX` (`on|off`), `TONE` (`auto|dark|light`). O modelo comentado
+     `config/preferences.conf` é a fonte única dos padrões; o instalador o
+     copia na primeira instalação e para o payload.
+   - Gravação no lugar: o manager (`prefs_save`) e o instalador
+     (`pref_set`) trocam só o valor da linha da chave; comentários, ordem e
+     chaves desconhecidas ficam. Chave ausente vai para o fim.
+   - `kawaii-arch-manager --reload-confs` (`reload.c`): valida tudo antes
+     (valor inválido ou bundle/imagem ausente em `set`/`fixed` aborta sem
+     aplicar; chave desconhecida só avisa), aplica `LOGO`/`MENU_BOX` numa
+     escrita (`layout_apply`), aplica um wallpaper só se o ativo não
+     corresponde ao modo (`fixed`/`set`; `global`/`balanced` não sorteiam)
+     e reaplica o tom (`retone_now`: helper instalado ou do payload).
+   - `--logo`/`--menu-box` gravam a preferência e aplicam. O instalador lê
+     `LOGO`/`MENU_BOX` como padrão das perguntas e grava as respostas; o
+     `--fresh` sem manter as preferências volta aos padrões.
+   - `TONE`: o helper força `dark`/`light`; `auto` mede o wallpaper.
+   - `--status` mostra as preferências e avisa quando o `theme.txt` difere.
 
 ## 4. Convenções
 
@@ -215,7 +239,7 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 3.1.0, manager 1.3.0, helper 2.1.1, unidade rev 2.
+Versões atuais: tema 3.1.1, manager 1.4.0, helper 2.2.0, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 
