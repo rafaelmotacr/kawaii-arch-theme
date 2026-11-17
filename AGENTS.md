@@ -165,8 +165,8 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      GRUB aceita comentários dentro de componentes (`read_object` em
      `theme_loader.c`). O logo usa o mesmo esquema (`#[logo] `).
    - Estado originalmente só no `theme.txt` (desde o item 8, vem de
-     `LOGO`/`MENU_BOX` no `preferences.conf`). As funções genéricas são `block_has`, `block_active` e
-     `block_set` no `install.sh` e `manager/src/layout.c` no manager.
+     `LOGO`/`MENU_BOX` no `preferences.conf`). As funções genéricas são `block_has`, `block_set` e
+     `set_layout` no `install.sh` e `manager/src/layout.c` no manager.
    - O helper atualiza o tom também nas linhas `#[menu] `, para o contorno
      religar no tom certo.
 8. **Preferências centralizadas** (tema 3.1.1, manager 1.4.0, helper 2.2.0).
@@ -201,9 +201,11 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      uma geração; os `.old` anteriores vão para uma guarda e só são apagados
      depois do sucesso; uma falha desfaz os movimentos;
    - `override`: apaga tudo em `DATA_DIR`, exceto os `*.old`;
-   - `keep`: não toca em `DATA_DIR`; o wallpaper ativo é guardado em
-     `DATA_DIR/.background.keep.<pid>.png` durante a troca do tema;
-   - o tema em `/boot` nunca tem `.old`;
+   - `keep`: não toca em `DATA_DIR` e reaproveita o wallpaper ativo;
+   - o tema em `/boot` nunca tem `.old`: o `--fresh` não o apaga antes;
+     `install_theme` o substitui pela troca atômica de sempre (sem
+     comparar versões), e `initial_background` só reaproveita o wallpaper
+     ativo fora do `--fresh` ou no `keep`;
    - sem arquivo ou sem chave: padrão do modelo do pacote; valor inválido
      aborta antes de qualquer pergunta ou alteração;
    - substituiu `--keep-config`/`--no-keep-config`, a pergunta "Manter as
@@ -211,6 +213,22 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      compatibilidade: ver `RULES.md`);
    - recuperação: `--import-bundle bundles.old/<id>` e cópia manual de
      `config.old/preferences.conf` + `--reload-confs`.
+
+10. **Simplificação do instalador** (sem mudança de versão; o `install.sh`
+    não é versionado). Cerca de 200 linhas a menos, sem código legado:
+    - o `theme.txt` do pacote precisa ter os marcadores `logo`, `menu-box`
+      e `no-menu-box`, e o helper precisa existir (conferidos no
+      `preflight`); sumiram os caminhos "tema sem marcadores", "tema sem
+      `tones/`" e "pacote sem helper";
+    - `set_layout` aplica logo e contorno de uma vez; o `theme.txt` instalado
+      só é regravado se o resultado mudar (`cmp`);
+    - `bundle_images` é a única validação de imagens de bundle do pacote
+      (contagem, aviso de imagens ignoradas e cópia);
+    - a atualização de um bundle do pacote não pergunta mais no meio da
+      instalação (regra 12): selecionar o bundle já é a resposta;
+    - `plan_component` e o laço de `install_components` substituem os
+      blocos repetidos de manager e helper; `install_service` grava a
+      unidade com `write_atomic` (sem `systemd-analyze verify`).
 
 ## 4. Convenções
 

@@ -75,7 +75,6 @@ DEFAULT_GRUB="$ROOT/etc/default/grub"
 
 if [[ -n "$ROOT" ]]; then SYSTEMCTL="${KAWAII_SYSTEMCTL:-}"; else SYSTEMCTL="systemctl"; fi
 
-LOGO_FILE="logos/arch-dark.png"   # logo padrao (o seletor de tom troca o arquivo)
 ID_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
 IMG_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,250}\.png$'
 
@@ -95,15 +94,12 @@ FRESH=0             # --fresh: apaga tudo e reinstala
 # Estado
 GRUB_DEFAULT_CHANGED=0
 NEED_DAEMON_RELOAD=0
-OLD_LOGO_STATE=""     # estado do logo no tema instalado: on | off | ""
-OLD_MENU_STATE=""     # estado do contorno do menu no tema instalado
 declare -A RESULT=()
 PKG_BUNDLES=()        # IDs validos encontrados em bundles/ do pacote
 declare -A PKG_NAME=() PKG_VER=() PKG_COUNT=()
 WANT_BUNDLES=()
 FRESH_MODE=""          # --fresh: ON_FRESH_INSTALL (backup | override | keep)
 FRESH_MODE_SRC=""      # de onde veio o valor (para o resumo)
-KEEP_BG=""             # --fresh keep: copia do wallpaper ativo durante a remocao
 
 # ---------------------------------------------------------------------
 # Utilitarios
@@ -177,13 +173,12 @@ semver_valid() {
     [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
 }
 
-# Versao declarada num script, lida do texto (sem executa-lo).
-# "0.0.0" = sem versao valida.
+# Versao declarada num script, lida do texto (sem executa-lo): "" se o
+# arquivo nao existe, "0.0.0" se nao ha versao valida.
 script_version() {
-    local file="$1" v
-    [[ -f "$file" ]] || { echo ""; return; }
-    v="$(sed -n -E 's/^VERSION="?([^"[:space:]]*)"?.*/\1/p' "$file" | head -n1)"
-    if [[ -n "$v" ]] && semver_valid "$v"; then echo "$v"; else echo "0.0.0"; fi
+    [[ -f "$1" ]] || return 0
+    local v; v="$(sed -n -E 's/^VERSION="?([^"[:space:]]*)"?.*/\1/p' "$1" | head -n1)"
+    if semver_valid "$v"; then echo "$v"; else echo "0.0.0"; fi
 }
 
 _cmp_prerelease() {
@@ -252,14 +247,10 @@ discover_paths() {
     elif t="$(grub_theme_value)" && [[ "$t" == */themes/$THEME_NAME/theme.txt ]]; then
         cand="${t%/themes/$THEME_NAME/theme.txt}"
     else
-        for t in /boot/grub /boot/grub2; do
-            if [[ -f "$ROOT$t/grub.cfg" ]]; then cand="$t"; break; fi
+        # o primeiro com grub.cfg; senao, o primeiro que existir
+        for t in /boot/grub/grub.cfg /boot/grub2/grub.cfg /boot/grub /boot/grub2; do
+            [[ -e "$ROOT$t" ]] && { cand="${t%/grub.cfg}"; break; }
         done
-        if [[ -z "$cand" ]]; then
-            for t in /boot/grub /boot/grub2; do
-                [[ -d "$ROOT$t" ]] && { cand="$t"; break; }
-            done
-        fi
     fi
     [[ -n "$cand" ]] || die "diretorio do GRUB nao encontrado (/boot/grub ou /boot/grub2); use --grub-dir"
     [[ "$cand" == /* && "$cand" =~ ^[A-Za-z0-9/._+-]+$ ]] || die "caminho do GRUB invalido: $cand"
@@ -281,19 +272,15 @@ service_enabled() {
 }
 
 theme_version() {   # versao do tema instalado ("" se ausente)
-    [[ -f "$THEME_FILE" ]] || { echo ""; return; }
-    local v=""
-    [[ -f "$THEME_DIR/VERSION" ]] && v="$(head -n1 "$THEME_DIR/VERSION" | tr -d '[:space:]')"
-    semver_valid "$v" && echo "$v" || echo "0.0.0"
+    [[ -f "$THEME_FILE" ]] || return 0
+    local v; v="$(head -n1 "$THEME_DIR/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
+    if semver_valid "$v"; then echo "$v"; else echo "0.0.0"; fi
 }
 
 # Blocos opcionais do theme.txt: linhas entre "# >>> NOME" e "# <<< NOME".
 # Um bloco desativado tem todas as linhas com o prefixo "#[TAG] ".
 block_has() {       # block_has ARQUIVO NOME -> 0 se os marcadores existem
     grep -q "^[[:space:]]*# >>> $2\$" "$1" 2>/dev/null && grep -q "^[[:space:]]*# <<< $2\$" "$1"
-}
-block_active() {    # block_active ARQUIVO NOME -> 0 se ha linha nao comentada
-    sed -n "/^[[:space:]]*# >>> $2\$/,/^[[:space:]]*# <<< $2\$/p" "$1" | grep -qv '^[[:space:]]*\(#\|$\)'
 }
 block_set() {       # block_set ARQUIVO NOME TAG on|off
     local f="$1" b="^[[:space:]]*# >>> $2\$" e="^[[:space:]]*# <<< $2\$" tag="$3"
@@ -304,16 +291,16 @@ block_set() {       # block_set ARQUIVO NOME TAG on|off
     fi
 }
 
-logo_state() {      # on | off | "" para um theme.txt
-    block_has "$1" logo || { echo ""; return; }
-    if block_active "$1" logo; then echo on; else echo off; fi
+# Logo e contorno do menu (WANT_LOGO, WANT_MENU) num theme.txt: o bloco
+# menu-box (limites +16 px por lado e menu_pixmap_style) e o no-menu-box
+# (limites originais) se alternam. Os marcadores sao conferidos no preflight.
+set_layout() {   # set_layout ARQUIVO
+    local other=on
+    [[ "$WANT_MENU" == on ]] && other=off
+    block_set "$1" logo logo "$WANT_LOGO"
+    block_set "$1" menu-box menu "$WANT_MENU"
+    block_set "$1" no-menu-box menu "$other"
 }
-
-menu_state() {      # contorno do menu: on | off | ""
-    block_has "$1" menu-box && block_has "$1" no-menu-box || { echo ""; return; }
-    if block_active "$1" menu-box; then echo on; else echo off; fi
-}
-
 manager_version() {
     [[ -x "$BIN_PATH" ]] || { echo ""; return; }
     "$BIN_PATH" --version 2>/dev/null | awk '{print $NF}' || echo "?"
@@ -325,23 +312,10 @@ render_unit() { sed "s|@THEME_DIR@|$THEME_RAW|g" "$SRC_UNIT"; }
 
 detect_state() {
     section "Estado atual"
-    local tv; tv="$(theme_version)"
-    if [[ -n "$tv" ]]; then
-        note "Tema:               v$tv em $THEME_RAW"
-    else
-        note "Tema:               nao instalado"
-    fi
-
-    # Logo e contorno: o padrao das perguntas vem das preferencias
-    OLD_LOGO_STATE="$(conf_get "$PREFS" LOGO || true)"
-    OLD_MENU_STATE="$(conf_get "$PREFS" MENU_BOX || true)"
-    [[ "$OLD_LOGO_STATE" == on || "$OLD_LOGO_STATE" == off ]] || OLD_LOGO_STATE=""
-    [[ "$OLD_MENU_STATE" == on || "$OLD_MENU_STATE" == off ]] || OLD_MENU_STATE=""
-
-    local mv; mv="$(manager_version)"
-    note "Manager:            ${mv:+v$mv}${mv:-nao instalado}"
-    local hv; hv="$(script_version "$HELPER_PATH")"
-    note "Background Helper:  ${hv:+v$hv}${hv:-nao instalado}"
+    local v
+    v="$(theme_version)";              note "Tema:               ${v:+v$v em $THEME_RAW}${v:-nao instalado}"
+    v="$(manager_version)";            note "Manager:            ${v:+v$v}${v:-nao instalado}"
+    v="$(script_version "$HELPER_PATH")"; note "Background Helper:  ${v:+v$v}${v:-nao instalado}"
     if [[ -f "$UNIT_PATH" ]]; then
         note "Servico systemd:    instalado ($(service_enabled && echo habilitado || echo desabilitado))"
     else
@@ -371,12 +345,14 @@ preflight() {
     semver_valid "$(tr -d '[:space:]' < "$SRC_THEME/VERSION" 2>/dev/null)" || die "grub-theme/VERSION ausente ou invalido"
     png_ok "$SRC_THEME/fallback.png" || die "grub-theme/fallback.png ausente ou invalido"
     png_ok "$SRC_THEME/background.png" || die "grub-theme/background.png (wallpaper padrao) ausente ou invalido"
+    compgen -G "$SRC_THEME/*.pf2" >/dev/null || die "fontes .pf2 ausentes em grub-theme/"
+    local b
+    for b in logo menu-box no-menu-box; do
+        block_has "$SRC_THEME/theme.txt" "$b" || die "theme.txt do pacote sem os marcadores do bloco $b"
+    done
+    [[ "$(script_version "$SRC_HELPER")" =~ ^(|0\.0\.0)$ ]] && die "helper do pacote ausente ou sem VERSION valida"
+    bash -n "$SRC_HELPER" || die "helper do pacote tem erro de sintaxe"
     discover_pkg_bundles
-    if [[ -f "$SRC_HELPER" ]]; then
-        semver_valid "$(script_version "$SRC_HELPER")" && [[ "$(script_version "$SRC_HELPER")" != 0.0.0 ]] \
-            || die "helper do pacote sem VERSION valida"
-        bash -n "$SRC_HELPER" || die "helper do pacote tem erro de sintaxe"
-    fi
     discover_paths
     info "Diretorio do GRUB: $GRUB_RAW"
 }
@@ -393,67 +369,47 @@ decide() {   # decide OPT pergunta-instalar default -> echo install|skip
     if ask_yn "$q" "$def" >&2; then echo install; else echo skip; fi
 }
 
+ask_onoff() {   # ask_onoff OPCAO PADRAO(on|off) pergunta -> echo on|off
+    if [[ -n "$1" ]]; then echo "$1"; return; fi
+    if ask_yn "$3" "$([[ "$2" == off ]] && echo N || echo S)" >&2; then echo on; else echo off; fi
+}
+
+# plan_component ROTULO OPCAO VERSAO-INSTALADA VERSAO-PACOTE -> install|keep|skip
+plan_component() {
+    local label="$1" opt="$2" inst="$3" pkg="$4" c
+    if [[ -z "$inst" ]]; then decide "$opt" "Instalar o $label (v$pkg)?" S; return; fi
+    c="$(semver_cmp "$inst" "$pkg")"
+    if ((c < 0)); then decide "$opt" "Atualizar o $label v$inst -> v$pkg?" S; return; fi
+    if ((c > 0)); then note "$label instalado (v$inst) e mais novo que o do pacote (v$pkg); sem downgrade" >&2
+    else note "$label ja atualizado (v$inst)" >&2; fi
+    echo keep
+}
+
+pref_onoff() {   # valor on|off de uma chave das preferencias ("" se outro)
+    local v; v="$(conf_get "$PREFS" "$1" || true)"
+    [[ "$v" == on || "$v" == off ]] && echo "$v"
+    return 0
+}
+
 plan() {
-    if ((FRESH)); then
-        plan_fresh
-        if [[ "$FRESH_MODE" != keep ]]; then   # dados descartados: padroes do pacote
-            OLD_LOGO_STATE=""; OLD_MENU_STATE=""
-        fi
-    fi
+    ((FRESH)) && plan_fresh
 
-    # Logo
-    local cur="${OLD_LOGO_STATE:-on}" def=S
-    [[ "$cur" == off ]] && def=N
-    if [[ -n "$OPT_LOGO" ]]; then WANT_LOGO="$OPT_LOGO"
-    elif ask_yn "Exibir o logo da distribuicao (Arch Linux por padrao) abaixo do menu?" "$def"; then WANT_LOGO=on
-    else WANT_LOGO=off
+    # Logo e contorno: o padrao vem das preferencias (exceto num --fresh que
+    # descarta os dados: padroes do pacote)
+    local logo="" menu=""
+    if [[ "$FRESH_MODE" == "" || "$FRESH_MODE" == keep ]]; then
+        logo="$(pref_onoff LOGO)"; menu="$(pref_onoff MENU_BOX)"
     fi
-
-    # Contorno do menu de boot
-    def=S; [[ "$OLD_MENU_STATE" == off ]] && def=N
-    if [[ -n "$OPT_MENU" ]]; then WANT_MENU="$OPT_MENU"
-    elif ask_yn "Exibir o contorno de vidro em volta do menu de boot?" "$def"; then WANT_MENU=on
-    else WANT_MENU=off
-    fi
+    WANT_LOGO="$(ask_onoff "$OPT_LOGO" "${logo:-on}" "Exibir o logo da distribuicao (Arch Linux por padrao) abaixo do menu?")"
+    WANT_MENU="$(ask_onoff "$OPT_MENU" "${menu:-on}" "Exibir o contorno de vidro em volta do menu de boot?")"
 
     plan_bundles
 
     section "Componentes opcionais (nenhum e obrigatorio; o tema funciona sem eles)"
-    local pkg inst c
-
-    # Manager
-    pkg="$(pkg_manager_version)"; inst=""
-    ((FRESH)) || inst="$(manager_version)"
-    if [[ -z "$inst" ]]; then
-        WANT_MANAGER="$(decide "$OPT_MANAGER" "Instalar o Kawaii Arch Manager (binario compilado, v$pkg)?" S)"
-    else
-        c="$(semver_cmp "$inst" "$pkg")"
-        if ((c < 0)); then
-            WANT_MANAGER="$(decide "$OPT_MANAGER" "Atualizar o Kawaii Arch Manager v$inst -> v$pkg?" S)"
-        else
-            WANT_MANAGER=keep
-            ((c > 0)) && note "Manager instalado (v$inst) e mais novo que o do pacote (v$pkg); sem downgrade" \
-                      || note "Manager ja atualizado (v$inst)"
-        fi
-    fi
-
-    # Helper
-    pkg="$(script_version "$SRC_HELPER")"; inst=""
-    ((FRESH)) || inst="$(script_version "$HELPER_PATH")"
-    if [[ -z "$inst" ]]; then
-        WANT_HELPER="$(decide "$OPT_HELPER" "Instalar o Background Helper (script de selecao, v$pkg)?" S)"
-    else
-        c="$(semver_cmp "$inst" "$pkg")"
-        if ((c < 0)); then
-            WANT_HELPER="$(decide "$OPT_HELPER" "Atualizar o Background Helper v$inst -> v$pkg?" S)"
-        else
-            WANT_HELPER=keep
-            ((c > 0)) && note "Helper instalado (v$inst) e mais novo que o do pacote (v$pkg); sem downgrade" \
-                      || note "Background Helper ja atualizado (v$inst)"
-        fi
-    fi
-    local helper_present=0
-    [[ "$WANT_HELPER" != skip ]] && helper_present=1
+    local inst_m="" inst_h=""
+    ((FRESH)) || { inst_m="$(manager_version)"; inst_h="$(script_version "$HELPER_PATH")"; }
+    WANT_MANAGER="$(plan_component "Kawaii Arch Manager" "$OPT_MANAGER" "$inst_m" "$(pkg_manager_version)")"
+    WANT_HELPER="$(plan_component "Background Helper" "$OPT_HELPER" "$inst_h" "$(script_version "$SRC_HELPER")")"
 
     # Servico (depende do helper)
     if ((!FRESH)) && [[ -f "$UNIT_PATH" ]]; then
@@ -464,11 +420,10 @@ plan() {
             [[ "$WANT_SERVICE" == skip ]] && WANT_SERVICE=keep
         fi
     else
-        local def_s=S
-        ((helper_present)) || def_s=N
-        WANT_SERVICE="$(decide "$OPT_SERVICE" "Instalar o servico systemd de troca automatica a cada boot?" "$def_s")"
+        WANT_SERVICE="$(decide "$OPT_SERVICE" "Instalar o servico systemd de troca automatica a cada boot?" \
+            "$([[ "$WANT_HELPER" == skip ]] && echo N || echo S)")"
     fi
-    if [[ "$WANT_SERVICE" != skip ]] && ((!helper_present)); then
+    if [[ "$WANT_SERVICE" != skip && "$WANT_HELPER" == skip ]]; then
         warn "o servico depende do Background Helper, que nao foi selecionado."
         if [[ "$OPT_HELPER" != 0 ]] && ask_yn "Instalar tambem o Background Helper?" S; then
             WANT_HELPER=install
@@ -513,23 +468,20 @@ setup_data_dir() {
 # ---------------------------------------------------------------------
 # Bundles do pacote
 # ---------------------------------------------------------------------
-# bundles/<id>/manifest.conf + bundles/<id>/backgrounds/*.png. A quantidade
-# de imagens e sempre contada; nada no pacote a declara.
-count_images() {   # count_images DIR -> numero de PNGs validos
-    local f n=0 name
-    shopt -s nullglob
-    for f in "$1"/*.png; do
-        name="${f##*/}"
-        [[ "$name" =~ $IMG_RE && ! -L "$f" ]] && png_ok "$f" && n=$((n + 1))
+# bundles/<id>/manifest.conf + bundles/<id>/backgrounds/*.png. As imagens
+# sao sempre verificadas; nada no pacote as declara.
+bundle_images() {   # bundle_images DIR -> caminhos dos PNGs validos de DIR/backgrounds
+    local f
+    for f in "$1"/backgrounds/*.png; do
+        [[ "${f##*/}" =~ $IMG_RE ]] && png_ok "$f" && echo "$f"
     done
-    shopt -u nullglob
-    echo "$n"
+    return 0
 }
 
 discover_pkg_bundles() {
     PKG_BUNDLES=()
     [[ -d "$SRC_BUNDLES" ]] || return 0
-    local d id mid ver n
+    local d id mid ver n all
     for d in "$SRC_BUNDLES"/*/; do
         [[ -d "$d" ]] || continue
         d="${d%/}"; id="${d##*/}"
@@ -542,8 +494,10 @@ discover_pkg_bundles() {
             warn "bundles/$id ignorado: ID do manifest.conf (\"$mid\") difere do nome da pasta"; continue
         fi
         semver_valid "$ver" || { warn "bundles/$id ignorado: VERSION invalida (\"$ver\")"; continue; }
-        n="$(count_images "$d/backgrounds")"
+        n="$(bundle_images "$d" | wc -l)"
         ((n > 0)) || { warn "bundles/$id ignorado: nenhuma imagem PNG compativel com o GRUB"; continue; }
+        all="$(compgen -G "$d/backgrounds/*.png" | wc -l || true)"
+        ((all == n)) || warn "bundles/$id: $((all - n)) imagem(ns) ignorada(s) (nome ou formato incompativel com o GRUB)"
         PKG_BUNDLES+=("$id")
         PKG_NAME[$id]="$(conf_get "$d/manifest.conf" NAME || true)"
         PKG_NAME[$id]="${PKG_NAME[$id]:-$id}"
@@ -611,51 +565,31 @@ plan_bundles() {
 }
 
 install_pkg_bundle() {   # install_pkg_bundle ID -> 0 ok/preservado, 1 falha
-    local id="$1" src="$SRC_BUNDLES/$1" dest="$BUNDLES_DIR/$1" pkg_ver inst_ver c
-    pkg_ver="${PKG_VER[$id]}"
-
+    local id="$1" dest="$BUNDLES_DIR/$1" ver="${PKG_VER[$1]}" inst f n=0
+    local tmp="$BUNDLES_DIR/.install-$id.$$" old="$BUNDLES_DIR/.old-$id.$$"
     if [[ -d "$dest" ]]; then
-        inst_ver="$(conf_get "$dest/manifest.conf" VERSION || true)"
-        c="$(semver_cmp "${inst_ver:-0.0.0}" "$pkg_ver")"
-        if ((c >= 0)); then
-            info "Bundle '$id' ja instalado (v${inst_ver}); preservado"
-            return 0
+        inst="$(conf_get "$dest/manifest.conf" VERSION || true)"
+        if (($(semver_cmp "${inst:-0.0.0}" "$ver") >= 0)); then
+            info "Bundle '$id' ja instalado (v$inst); preservado"; return 0
         fi
-        ask_yn "Atualizar o bundle '$id' v${inst_ver:-?} -> v$pkg_ver?" S || return 0
+        info "Atualizando o bundle '$id': v${inst:-?} -> v$ver"
     fi
-
-    local tmp="$BUNDLES_DIR/.install-$id.$$" n=0 f name
     rm -rf "$tmp"
-    mkdir -p "$tmp/backgrounds"
-    cp "$src/manifest.conf" "$tmp/" || { rm -rf "$tmp"; warn "falha ao copiar o manifest.conf de '$id'"; return 1; }
-    shopt -s nullglob
-    for f in "$src/backgrounds"/*.png; do
-        name="${f##*/}"
-        if [[ ! "$name" =~ $IMG_RE || -L "$f" ]] || ! png_ok "$f"; then
-            warn "$id: ignorada (nome ou formato incompativel com o GRUB): $name"; continue
-        fi
-        if ! cp --no-preserve=all -- "$f" "$tmp/backgrounds/$name" \
-            || [[ "$(stat -c %s -- "$f")" != "$(stat -c %s -- "$tmp/backgrounds/$name")" ]]; then
-            shopt -u nullglob; rm -rf "$tmp"; warn "$id: falha ao copiar $name"; return 1
-        fi
+    mkdir -p "$tmp/backgrounds" && cp "$SRC_BUNDLES/$id/manifest.conf" "$tmp/" || { rm -rf "$tmp"; return 1; }
+    while IFS= read -r f; do
+        cp --no-preserve=all -- "$f" "$tmp/backgrounds/" || { rm -rf "$tmp"; return 1; }
         n=$((n + 1))
-    done
-    shopt -u nullglob
-    ((n > 0)) || { rm -rf "$tmp"; warn "$id: nenhuma imagem valida"; return 1; }
+    done < <(bundle_images "$SRC_BUNDLES/$id")
     chmod -R u=rwX,go=rX "$tmp"
     sync -f "$tmp" 2>/dev/null || sync
-
     if [[ -d "$dest" ]]; then
-        local old="$BUNDLES_DIR/.old-$id.$$"
-        if ! { mv "$dest" "$old" && mv "$tmp" "$dest"; }; then
-            [[ -d "$old" && ! -d "$dest" ]] && mv "$old" "$dest"
-            rm -rf "$tmp"; warn "falha ao atualizar o bundle '$id'"; return 1
-        fi
+        mv "$dest" "$old" || { rm -rf "$tmp"; return 1; }
+        mv "$tmp" "$dest" || { mv "$old" "$dest"; rm -rf "$tmp"; return 1; }
         rm -rf "$old"
     else
-        mv "$tmp" "$dest" || { rm -rf "$tmp"; warn "falha ao instalar o bundle '$id'"; return 1; }
+        mv "$tmp" "$dest" || { rm -rf "$tmp"; return 1; }
     fi
-    info "Bundle '$id' v$pkg_ver instalado: $n imagens, $(du -sh "$dest" | cut -f1)"
+    info "Bundle '$id' v$ver instalado: $n imagens, $(du -sh "$dest" | cut -f1)"
 }
 
 install_bundles() {
@@ -681,60 +615,27 @@ installed_bundles() {
 # ---------------------------------------------------------------------
 # Tema
 # ---------------------------------------------------------------------
-set_logo() {   # set_logo ARQUIVO on|off
-    local f="$1" state="$2"
-    block_has "$f" logo || { warn "marcadores do logo ausentes no theme.txt"; return 0; }
-    block_set "$f" logo logo "$state"
-    [[ "$(logo_state "$f")" == "$state" ]] || die "falha ao $( [[ "$state" == on ]] && echo ativar || echo desativar) o logo"
-}
-
-# Contorno do menu: o bloco menu-box (limites +16 px por lado e
-# menu_pixmap_style) e o no-menu-box (limites originais) se alternam.
-set_menu() {   # set_menu ARQUIVO on|off
-    local f="$1" state="$2" other=off
-    [[ "$state" == off ]] && other=on
-    [[ -n "$(menu_state "$f")" ]] || { warn "marcadores do contorno do menu ausentes no theme.txt"; return 0; }
-    block_set "$f" menu-box menu "$state"
-    block_set "$f" no-menu-box menu "$other"
-    if [[ "$state" == on ]]; then
-        block_active "$f" menu-box && ! block_active "$f" no-menu-box || die "falha ao ativar o contorno do menu"
-    else
-        ! block_active "$f" menu-box && block_active "$f" no-menu-box || die "falha ao desativar o contorno do menu"
-    fi
-}
-
-# Primeiro wallpaper ativo para um tema novo/atualizado: o atual, uma imagem
-# aleatoria dos bundles instalados ou o padrao do pacote
+# Primeiro wallpaper de um tema novo: o que estava ativo (exceto num --fresh
+# que descarta os dados), uma imagem aleatoria dos bundles ou o padrao
 initial_background() {   # -> caminho da imagem de origem
-    local old="$1" f
-    # --fresh com ON_FRESH_INSTALL=keep: o wallpaper que estava ativo
-    if [[ -n "$KEEP_BG" ]] && png_ok "$KEEP_BG"; then echo "$KEEP_BG"; return; fi
-    if png_ok "$old/background.png"; then echo "$old/background.png"; return; fi
-    local -a dirs=()
-    local id
-    while IFS= read -r id; do dirs+=("$BUNDLES_DIR/$id/backgrounds"); done < <(installed_bundles)
-    if ((${#dirs[@]})); then
-        while IFS= read -r f; do
-            png_ok "$f" && { echo "$f"; return; }
-        done < <(find "${dirs[@]}" -maxdepth 1 -type f -name '*.png' | shuf)
+    local f id
+    if [[ "$FRESH_MODE" == "" || "$FRESH_MODE" == keep ]] && png_ok "$THEME_DIR/background.png"; then
+        echo "$THEME_DIR/background.png"; return
     fi
-    # Sem bundles: wallpaper padrao do pacote
-    if png_ok "$SRC_THEME/background.png"; then echo "$SRC_THEME/background.png"; return; fi
-    echo "$SRC_THEME/fallback.png"
+    f="$(for id in $(installed_bundles); do bundle_images "$BUNDLES_DIR/$id"; done | shuf -n1)"
+    echo "${f:-$SRC_THEME/background.png}"
 }
 
 install_theme() {
-    local src_ver inst_ver c
+    local src_ver inst_ver c bg
+    local new="$THEMES_DIR/.$THEME_NAME.new.$$" old="$THEMES_DIR/.$THEME_NAME.old.$$"
     src_ver="$(tr -d '[:space:]' < "$SRC_THEME/VERSION")"
     inst_ver="$(theme_version)"
-
-    if [[ -n "$inst_ver" ]]; then
+    if [[ -n "$inst_ver" ]] && ((!FRESH)); then
         c="$(semver_cmp "$inst_ver" "$src_ver")"
-        if ((c > 0)); then
-            info "Tema instalado (v$inst_ver) e mais novo que o do pacote (v$src_ver); nenhum downgrade sera feito"
-            apply_layout_in_place; ensure_active_background; return 0
-        elif ((c == 0)); then
-            info "Tema ja atualizado (v$inst_ver)"
+        if ((c >= 0)); then
+            if ((c > 0)); then info "Tema instalado (v$inst_ver) e mais novo que o do pacote (v$src_ver); nenhum downgrade sera feito"
+            else info "Tema ja atualizado (v$inst_ver)"; fi
             apply_layout_in_place; ensure_active_background; return 0
         fi
         info "Atualizando o tema: v$inst_ver -> v$src_ver"
@@ -742,63 +643,41 @@ install_theme() {
         info "Instalando o tema v$src_ver em $THEME_RAW"
     fi
 
+    # O tema novo e montado ao lado e troca de lugar com o anterior
     mkdir -p "$THEMES_DIR"
-    local new="$THEMES_DIR/.$THEME_NAME.new.$$" old="$THEMES_DIR/.$THEME_NAME.old.$$" bg
     rm -rf "$new"
     cp -r "$SRC_THEME" "$new"
-    rm -f "$new/background.png"
     chmod -R u=rwX,go=rX "$new"
-    set_logo "$new/theme.txt" "$WANT_LOGO"
-    set_menu "$new/theme.txt" "$WANT_MENU"
-    [[ "$WANT_LOGO" == off ]] || [[ -f "$new/$LOGO_FILE" ]] || die "logo ativado, mas $LOGO_FILE nao esta no tema"
-
-    bg="$(initial_background "$THEME_DIR")"
-    cp --no-preserve=all -- "$bg" "$new/background.png" || { rm -rf "$new"; die "falha ao criar background.png"; }
-    chmod 644 "$new/background.png"
-
-    # Validacao antes de substituir
-    png_ok "$new/background.png" || { rm -rf "$new"; die "background.png invalido"; }
-    png_ok "$new/fallback.png" || { rm -rf "$new"; die "fallback.png invalido"; }
-    grep -qx 'desktop-image: "background.png"' "$new/theme.txt" || { rm -rf "$new"; die "theme.txt invalido"; }
-    compgen -G "$new/*.pf2" >/dev/null || { rm -rf "$new"; die "fontes .pf2 ausentes no tema"; }
-
+    set_layout "$new/theme.txt"
+    bg="$(initial_background)"
+    cp --no-preserve=all -- "$bg" "$new/background.png" && chmod 644 "$new/background.png" \
+        || { rm -rf "$new"; die "falha ao criar background.png"; }
     sync -f "$new" 2>/dev/null || sync
     if [[ -d "$THEME_DIR" ]]; then
         mv "$THEME_DIR" "$old" || { rm -rf "$new"; die "falha ao mover o tema anterior"; }
-        if ! mv "$new" "$THEME_DIR"; then
-            mv "$old" "$THEME_DIR"; rm -rf "$new"; die "falha ao instalar o tema; anterior restaurado"
-        fi
+        mv "$new" "$THEME_DIR" || { mv "$old" "$THEME_DIR"; rm -rf "$new"; die "falha ao instalar o tema; anterior restaurado"; }
         rm -rf "$old"
     else
         mv "$new" "$THEME_DIR" || die "falha ao instalar o tema"
     fi
     sync -f "$THEME_DIR" 2>/dev/null || sync
-    if [[ -n "$KEEP_BG" && "$bg" == "$KEEP_BG" ]]; then
-        info "Tema v$src_ver instalado; wallpaper ativo: o mesmo de antes da reinstalacao"
-    else
-        info "Tema v$src_ver instalado; wallpaper ativo: $(raw_path "$bg")"
-    fi
+    [[ "$bg" == "$THEME_DIR/background.png" ]] && bg="o mesmo de antes" || bg="$(raw_path "$bg")"
+    info "Tema v$src_ver instalado; wallpaper ativo: $bg"
     note "Espaco ocupado em $(raw_path "$THEME_DIR"): $(du -sh "$THEME_DIR" | cut -f1)"
 }
 
 # Logo e contorno do menu num tema ja atualizado (escreve so se mudar)
 apply_layout_in_place() {
-    local logo menu
-    logo="$(logo_state "$THEME_FILE")"; menu="$(menu_state "$THEME_FILE")"
-    [[ ( -z "$logo" || "$logo" == "$WANT_LOGO" ) && ( -z "$menu" || "$menu" == "$WANT_MENU" ) ]] && return 0
     local tmp; tmp="$(mktemp "$THEME_DIR/.theme.txt.XXXXXX")"
-    cp "$THEME_FILE" "$tmp"
-    [[ -n "$logo" && "$logo" != "$WANT_LOGO" ]] && set_logo "$tmp" "$WANT_LOGO"
-    [[ -n "$menu" && "$menu" != "$WANT_MENU" ]] && set_menu "$tmp" "$WANT_MENU"
-    chmod 644 "$tmp"; mv -f "$tmp" "$THEME_FILE"
-    [[ -n "$logo" && "$logo" != "$WANT_LOGO" ]] && info "Logo $( [[ "$WANT_LOGO" == on ]] && echo ativado || echo desativado)"
-    [[ -n "$menu" && "$menu" != "$WANT_MENU" ]] && info "Contorno do menu $( [[ "$WANT_MENU" == on ]] && echo ativado || echo desativado)"
-    return 0
+    cp "$THEME_FILE" "$tmp" && set_layout "$tmp"
+    if cmp -s "$tmp" "$THEME_FILE"; then rm -f "$tmp"; return 0; fi
+    chmod 644 "$tmp" && mv -f "$tmp" "$THEME_FILE"
+    info "theme.txt atualizado: logo $WANT_LOGO, contorno do menu $WANT_MENU"
 }
 
 ensure_active_background() {
     png_ok "$THEME_DIR/background.png" && return 0
-    local bg; bg="$(initial_background "$THEME_DIR")"
+    local bg; bg="$(initial_background)"
     cp --no-preserve=all -- "$bg" "$THEME_DIR/background.png.tmp" && chmod 644 "$THEME_DIR/background.png.tmp" \
         && mv -f "$THEME_DIR/background.png.tmp" "$THEME_DIR/background.png" || die "falha ao criar background.png"
     info "background.png recriado a partir de $(raw_path "$bg")"
@@ -826,7 +705,7 @@ setup_prefs() {
     else
         write_atomic "$PREFS" 644 < "$SRC_PREFS" || die "falha ao gravar $PREFS"
         pref_set "$PREFS" SELECTED_BUNDLE "$(installed_bundles | sed -n 1p)" || die "falha ao gravar $PREFS"
-        info "Preferencias criadas em $(raw_path "$PREFS") (MODE=global)"
+        info "Preferencias criadas em $(raw_path "$PREFS") (MODE=$(conf_get "$PREFS" MODE))"
     fi
     pref_set "$PREFS" LOGO "$WANT_LOGO" && pref_set "$PREFS" MENU_BOX "$WANT_MENU" \
         || die "falha ao gravar LOGO/MENU_BOX em $PREFS"
@@ -836,25 +715,20 @@ setup_prefs() {
 # Componentes opcionais (falhas nao abortam a instalacao)
 # ---------------------------------------------------------------------
 install_payload() {
-    install -d -m 755 "$PAYLOAD_DIR" "$PAYLOAD_DIR/bundles" || return 1
-    install -m 644 "$SRC_HELPER" "$PAYLOAD_DIR/grub-random-bg.sh" || return 1
-    install -m 644 "$SRC_UNIT" "$PAYLOAD_DIR/grub-random-bg.service.in" || return 1
-    install -m 644 "$SRC_THEME/VERSION" "$PAYLOAD_DIR/theme-version" || return 1
-    install -m 644 "$SRC_PREFS" "$PAYLOAD_DIR/preferences.conf" || return 1
+    install -d -m 755 "$PAYLOAD_DIR/bundles" \
+        && install -m 644 "$SRC_HELPER" "$SRC_UNIT" "$SRC_PREFS" "$PAYLOAD_DIR/" \
+        && install -m 644 "$SRC_THEME/VERSION" "$PAYLOAD_DIR/theme-version" || return 1
     local k
-    for k in "$SRC_DIR"/bundles/*.kawall; do
-        [[ -f "$k" ]] && { install -m 644 "$k" "$PAYLOAD_DIR/bundles/" || return 1; }
+    for k in "$SRC_BUNDLES"/*.kawall; do
+        if [[ -f "$k" ]]; then install -m 644 "$k" "$PAYLOAD_DIR/bundles/" || return 1; fi
     done
-    return 0
 }
 
 install_manager() {
-    local pkg; pkg="$(pkg_manager_version)"
-    local cc_bin=""
-    command -v cc >/dev/null && cc_bin=cc
-    [[ -z "$cc_bin" ]] && command -v gcc >/dev/null && cc_bin=gcc
-    local missing=()
-    [[ -n "$cc_bin" ]] || missing+=("compilador C (gcc)")
+    local pkg cc bdir missing=()
+    pkg="$(pkg_manager_version)"
+    cc="$(command -v cc || command -v gcc || true)"
+    [[ -n "$cc" ]] || missing+=("compilador C (gcc)")
     command -v make >/dev/null || missing+=("make")
     [[ -f /usr/include/archive.h ]] || missing+=("libarchive (headers)")
     [[ -f /usr/include/zlib.h ]] || missing+=("zlib (headers)")
@@ -863,26 +737,19 @@ install_manager() {
         note "No Arch Linux: pacman -S --needed base-devel libarchive zlib"
         return 1
     fi
-    local bdir log
-    bdir="$(mktemp -d)"; log="$bdir/build.log"
+    bdir="$(mktemp -d)"
     cp -r "$SRC_MANAGER/Makefile" "$SRC_MANAGER/src" "$bdir/" || { rm -rf "$bdir"; return 1; }
     info "Compilando o kawaii-arch-manager v$pkg"
-    if ! make -C "$bdir" CC="$cc_bin" BUILD=out >"$log" 2>&1; then
-        warn "a compilacao falhou:"; tail -n 20 "$log" >&2; rm -rf "$bdir"; return 1
+    if ! make -C "$bdir" CC="$cc" BUILD=out >"$bdir/build.log" 2>&1; then
+        warn "a compilacao falhou:"; tail -n 20 "$bdir/build.log" >&2; rm -rf "$bdir"; return 1
     fi
-    local built="$bdir/out/kawaii-arch-manager"
-    if [[ "$(head -c4 "$built" | od -An -c | tr -d ' ')" != '177ELF' ]] \
-        || [[ "$("$built" --version 2>/dev/null)" != "kawaii-arch-manager $pkg" ]]; then
+    if [[ "$("$bdir/out/kawaii-arch-manager" --version 2>/dev/null)" != "kawaii-arch-manager $pkg" ]]; then
         warn "o binario compilado nao passou na verificacao (--version)"; rm -rf "$bdir"; return 1
     fi
-    install -d -m 755 "$(dirname "$BIN_PATH")" \
-        && install -m 755 "$built" "$BIN_PATH.tmp" \
-        && mv -f "$BIN_PATH.tmp" "$BIN_PATH" || { rm -f "$BIN_PATH.tmp"; rm -rf "$bdir"; warn "falha ao instalar $BIN_PATH"; return 1; }
+    install -D -m 755 "$bdir/out/kawaii-arch-manager" "$BIN_PATH.tmp" && mv -f "$BIN_PATH.tmp" "$BIN_PATH" \
+        || { rm -f "$BIN_PATH.tmp"; rm -rf "$bdir"; warn "falha ao instalar $(raw_path "$BIN_PATH")"; return 1; }
     rm -rf "$bdir"
-    [[ -x "$BIN_PATH" && "$("$BIN_PATH" --version 2>/dev/null)" == "kawaii-arch-manager $pkg" ]] \
-        || { warn "o manager instalado nao responde a --version"; return 1; }
     info "Kawaii Arch Manager v$pkg instalado em $(raw_path "$BIN_PATH")"
-    return 0
 }
 
 install_helper() {
@@ -897,19 +764,8 @@ install_helper() {
 
 install_service() {
     [[ -f "$HELPER_PATH" ]] || { warn "servico nao instalado: o Background Helper nao esta presente"; return 1; }
-    local tmpd tmp; tmpd="$(mktemp -d)"; tmp="$tmpd/$SERVICE_NAME"
-    render_unit > "$tmp" || { rm -rf "$tmpd"; return 1; }
-    if [[ -f "$UNIT_PATH" ]] && cmp -s "$tmp" "$UNIT_PATH"; then
-        info "Unidade systemd ja identica a do pacote; nada a fazer"
-        rm -rf "$tmpd"; return 0
-    fi
-    if [[ -z "$ROOT" ]] && command -v systemd-analyze >/dev/null; then
-        local out; out="$(systemd-analyze verify "$tmp" 2>&1 | grep -v -e 'ExecStart=.*not executable' -e 'Unit .* not found' || true)"
-        [[ -n "$out" ]] && { warn "systemd-analyze verify:"; echo "$out" >&2; }
-    fi
-    install -d -m 755 "$(dirname "$UNIT_PATH")" && install -m 644 "$tmp" "$UNIT_PATH" \
-        || { rm -rf "$tmpd"; warn "falha ao instalar a unidade"; return 1; }
-    rm -rf "$tmpd"
+    install -d -m 755 "$(dirname "$UNIT_PATH")" && render_unit | write_atomic "$UNIT_PATH" 644 \
+        || { warn "falha ao instalar a unidade"; return 1; }
     NEED_DAEMON_RELOAD=1
     info "Unidade systemd instalada: $(raw_path "$UNIT_PATH") (RequiresMountsFor=$THEME_RAW)"
 }
@@ -921,34 +777,21 @@ daemon_reload() {
     NEED_DAEMON_RELOAD=0
 }
 
-run_component() {   # run_component NOME FUNCAO
-    local name="$1" fn="$2"
-    if "$fn"; then RESULT[$name]="ok"; else RESULT[$name]="falhou"; warn "$name nao foi instalado; os demais componentes continuam"; fi
-}
-
 install_components() {
     section "Componentes"
-
-    case "$WANT_MANAGER" in
-        install) run_component manager install_manager ;;
-        keep)    RESULT[manager]="mantido" ;;
-        *)       RESULT[manager]="recusado" ;;
-    esac
-    if [[ -x "$BIN_PATH" ]]; then
-        install_payload || warn "falha ao atualizar o payload do manager em $(raw_path "$PAYLOAD_DIR")"
-    fi
-
-    case "$WANT_HELPER" in
-        install) run_component helper install_helper ;;
-        keep)    RESULT[helper]="mantido" ;;
-        *)       RESULT[helper]="recusado" ;;
-    esac
-
-    case "$WANT_SERVICE" in
-        install) run_component service install_service ;;
-        keep)    RESULT[service]="mantido" ;;
-        *)       RESULT[service]="recusado" ;;
-    esac
+    local c want
+    for c in manager helper service; do
+        want="WANT_${c^^}"
+        case "${!want}" in
+            install) if "install_$c"; then RESULT[$c]=ok
+                     else RESULT[$c]=falhou; warn "$c nao foi instalado; os demais componentes continuam"; fi ;;
+            keep)    RESULT[$c]=mantido ;;
+            *)       RESULT[$c]=recusado ;;
+        esac
+        if [[ "$c" == manager && -x "$BIN_PATH" ]]; then
+            install_payload || warn "falha ao atualizar o payload do manager em $(raw_path "$PAYLOAD_DIR")"
+        fi
+    done
     daemon_reload
 
     if [[ -f "$UNIT_PATH" && -n "$SYSTEMCTL" ]]; then
@@ -974,21 +817,17 @@ install_components() {
 # Roda depois dos componentes (o manager pode ter acabado de ser
 # instalado) e so escreve no /boot o que mudou.
 apply_theme_tone() {
-    [[ -d "$THEME_DIR/tones" ]] || return 0
     section "Tom do tema"
     if ! bash "$SRC_HELPER" --retone --quiet; then
         warn "nao foi possivel ajustar o tom do tema ao wallpaper; mantido o atual"
         return 0
     fi
-    local tone="" logo
-    [[ -r "$THEME_DIR/icons/.tone" ]] && tone="$(head -n1 "$THEME_DIR/icons/.tone")"
-    logo="$(sed -n -E 's/^[^#]*file[[:space:]]*=[[:space:]]*"logos\/([^"]+)".*/\1/p' "$THEME_FILE" | head -n1)"
-    case "$tone" in
-        light) info "Tom: light (wallpaper claro: texto, icones e bordas escuros)" ;;
-        *)     info "Tom: dark (wallpaper escuro: texto, icones e bordas claros)" ;;
-    esac
+    if [[ "$(head -n1 "$THEME_DIR/icons/.tone" 2>/dev/null || true)" == light ]]; then
+        info "Tom: light (wallpaper claro: texto, icones e bordas escuros)"
+    else
+        info "Tom: dark (wallpaper escuro: texto, icones e bordas claros)"
+    fi
     [[ -x "$BIN_PATH" ]] || note "Sem o kawaii-arch-manager a claridade nao e medida; o tom fica sempre dark"
-    [[ "$WANT_LOGO" == on && -n "$logo" ]] && note "Logo: logos/$logo"
     return 0
 }
 
@@ -1079,7 +918,7 @@ regen_grub_cfg() {
     grep -q '^[[:space:]]*menuentry' "$new" || warn "nenhuma entrada de menu no grub.cfg gerado"
     [[ -f "$GRUB_CFG" ]] && cp -p "$GRUB_CFG" "$GRUB_CFG.bak"
     mv "$new" "$GRUB_CFG"
-    info "$GRUB_CFG atualizado${GRUB_CFG:+ (anterior em $GRUB_CFG.bak)}"
+    info "$GRUB_CFG atualizado (anterior em $GRUB_CFG.bak)"
 }
 
 # ---------------------------------------------------------------------
@@ -1103,17 +942,15 @@ summary() {
 }
 
 # ---------------------------------------------------------------------
-# Remocao do que esta instalado (usada por --uninstall e --fresh).
-# /etc/default/grub e grub.cfg nao sao tocados aqui.
-remove_installation() {
-    local had_unit=0
-    [[ -f "$UNIT_PATH" ]] && had_unit=1
+# Remove os componentes (usada por --uninstall e --fresh). O tema e os
+# dados sao tratados por quem chama; /etc/default/grub e grub.cfg nunca.
+remove_components() {
     if [[ -n "$SYSTEMCTL" ]]; then "$SYSTEMCTL" disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true; fi
+    if [[ -f "$UNIT_PATH" ]]; then NEED_DAEMON_RELOAD=1; fi
     rm -f "$UNIT_PATH" "$HELPER_PATH" "$BIN_PATH"
     rmdir "$LIB_DIR" 2>/dev/null || true
     rm -rf "$SHARE_DIR"
-    ((had_unit)) && { NEED_DAEMON_RELOAD=1; daemon_reload; }
-    rm -rf "$THEME_DIR"
+    daemon_reload
 }
 
 # --fresh: mostra o que sera apagado e pede confirmacao (antes de qualquer
@@ -1132,8 +969,7 @@ plan_fresh() {
     local -a items=() ids=() lost=()
     local i id d
     if [[ -d "$THEME_DIR" ]]; then
-        if [[ "$FRESH_MODE" == keep ]]; then items+=("tema em $THEME_RAW (o wallpaper ativo sera mantido)")
-        else items+=("tema em $THEME_RAW (inclui o wallpaper ativo)"); fi
+        items+=("tema em $THEME_RAW ($([[ "$FRESH_MODE" == keep ]] && echo "o wallpaper ativo sera mantido" || echo "inclui o wallpaper ativo"))")
     fi
     [[ -e "$BIN_PATH" || -d "$SHARE_DIR" ]] && items+=("Kawaii Arch Manager ($(raw_path "$BIN_PATH")) e payload")
     [[ -f "$HELPER_PATH" ]] && items+=("Background Helper ($(raw_path "$HELPER_PATH"))")
@@ -1187,9 +1023,9 @@ plan_fresh() {
 # Le ON_FRESH_INSTALL do preferences.conf instalado (ausente: padrao do
 # modelo do pacote). Valor invalido aborta antes de qualquer alteracao.
 read_fresh_mode() {
-    local v="" src
+    local v src
     src="$(raw_path "$PREFS")"
-    [[ -f "$PREFS" ]] && v="$(conf_get "$PREFS" ON_FRESH_INSTALL || true)"
+    v="$(conf_get "$PREFS" ON_FRESH_INSTALL || true)"
     if [[ -z "$v" ]]; then
         v="$(conf_get "$SRC_PREFS" ON_FRESH_INSTALL || true)"
         src="padrao do pacote"
@@ -1204,10 +1040,8 @@ read_fresh_mode() {
 # so sao descartados depois que os novos estao no lugar; uma falha desfaz
 # os movimentos e aborta sem ter apagado nada.
 backup_data() {
-    local prev="$DATA_DIR/.old.prev.$$" d i
+    local prev="$DATA_DIR/.old.prev.$$" d i bad
     local -a from=() to=()
-    rm -rf "$prev"
-    mkdir -m 700 "$prev" || die "falha ao criar $(raw_path "$prev"); nada foi apagado"
     for d in bundles config; do
         [[ -d "$DATA_DIR/$d" && ! -L "$DATA_DIR/$d" ]] || continue
         if [[ -e "$DATA_DIR/$d.old" || -L "$DATA_DIR/$d.old" ]]; then
@@ -1215,59 +1049,30 @@ backup_data() {
         fi
         from+=("$DATA_DIR/$d"); to+=("$DATA_DIR/$d.old")
     done
+    mkdir -p -m 700 "$prev" || die "falha ao criar $(raw_path "$prev"); nada foi apagado"
     for i in "${!from[@]}"; do
         mv -T -- "${from[i]}" "${to[i]}" && continue
-        local bad="${from[i]}"
-        while ((--i >= 0)); do mv -T -- "${to[i]}" "${from[i]}" || true; done
+        bad="${from[i]}"
+        while ((i-- > 0)); do mv -T -- "${to[i]}" "${from[i]}" || true; done
         rm -rf "$prev"
         die "falha ao mover $(raw_path "$bad") para o backup; nada foi apagado"
     done
-    sync -f "$DATA_DIR" 2>/dev/null || sync
     rm -rf "$prev"
-    for d in bundles config; do
-        [[ -d "$DATA_DIR/$d.old" && " ${to[*]} " == *" $DATA_DIR/$d.old "* ]] \
-            && info "Backup: $(raw_path "$DATA_DIR/$d") -> $(raw_path "$DATA_DIR/$d.old")"
-    done
-    return 0
 }
 
-# keep: guarda o wallpaper ativo (o tema sera apagado) em DATA_DIR, que nao
-# e alterado; o tema novo o usa e a copia e descartada em finish_keep
-keep_exit_report() {
-    [[ -n "$KEEP_BG" && -f "$KEEP_BG" ]] || return 0
-    warn "o wallpaper que estava ativo ficou guardado em $(raw_path "$KEEP_BG")"
-}
-
-stash_background() {
-    png_ok "$THEME_DIR/background.png" || return 0
-    mkdir -p "$DATA_DIR" || die "falha ao criar $(raw_path "$DATA_DIR"); nada foi apagado"
-    KEEP_BG="$DATA_DIR/.background.keep.$$.png"
-    cp --no-preserve=all -- "$THEME_DIR/background.png" "$KEEP_BG" \
-        || { rm -f "$KEEP_BG"; KEEP_BG=""; die "falha ao guardar o wallpaper ativo; nada foi apagado"; }
-    trap keep_exit_report EXIT
-}
-
-finish_keep() {
-    [[ -n "$KEEP_BG" ]] || return 0
-    rm -f -- "$KEEP_BG"; KEEP_BG=""
-    trap - EXIT
-}
-
+# O tema nao e apagado aqui: install_theme o substitui (troca atomica) e,
+# no keep, reaproveita o wallpaper ativo
 fresh_wipe() {
-    [[ -d "$THEME_DIR" || -e "$BIN_PATH" || -d "$SHARE_DIR" || -f "$HELPER_PATH" || -f "$UNIT_PATH" || -d "$DATA_DIR" ]] || return 0
     section "Remocao (instalacao limpa)"
-    case "$FRESH_MODE" in
-        backup) [[ -d "$DATA_DIR" ]] && backup_data ;;
-        keep)   stash_background ;;
-    esac
-    remove_installation
+    if [[ "$FRESH_MODE" == backup && -d "$DATA_DIR" ]]; then backup_data; fi
+    remove_components
     if [[ "$FRESH_MODE" != keep && -d "$DATA_DIR" ]]; then
         find "$DATA_DIR" -mindepth 1 -maxdepth 1 ! -name bundles.old ! -name config.old -exec rm -rf -- {} +
     fi
     case "$FRESH_MODE" in
-        backup)   info "Instalacao anterior removida (tema e componentes); bundles e preferencias em *.old" ;;
-        override) info "Instalacao anterior removida (tema, componentes, bundles, preferencias e estado)" ;;
-        keep)     info "Instalacao anterior removida (tema e componentes); bundles, preferencias e estado mantidos" ;;
+        backup)   info "Componentes removidos; bundles e preferencias movidos para *.old em $(raw_path "$DATA_DIR")" ;;
+        override) info "Componentes, bundles, preferencias e estado removidos" ;;
+        keep)     info "Componentes removidos; bundles, preferencias e estado mantidos" ;;
     esac
 }
 
@@ -1280,7 +1085,6 @@ do_install() {
     setup_data_dir
     install_bundles
     install_theme
-    finish_keep
     setup_prefs
     install_components
     apply_theme_tone
@@ -1301,7 +1105,8 @@ do_uninstall() {
     fi
     ask_yn "Continuar?" S || die "cancelado"
 
-    remove_installation
+    remove_components
+    rm -rf "$THEME_DIR"
     info "Componentes e tema removidos"
 
     if ((OPT_PURGE)); then

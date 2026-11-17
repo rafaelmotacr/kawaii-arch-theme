@@ -635,6 +635,14 @@ echo 9.0.0 > "$LT/VERSION"
 out="$("$PKGT/install.sh" --yes 2>&1)"
 check "sem downgrade do tema" grep -q 'mais novo que o do pacote' <<< "$out"
 cp "$PKG/grub-theme/VERSION" "$LT/VERSION"
+sed -i 's/^VERSION=.*/VERSION="0.9.0"/' "$LD/bundles/alpha/manifest.conf"
+rm "$LD/bundles/alpha/backgrounds/background1.png"
+if command -v script >/dev/null; then
+    out="$(printf '\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --menu-box --no-components" /dev/null 2>&1)"; rc=$?
+    check "bundle antigo atualizado sem pergunta no meio da instalacao" bash -c "[[ $rc == 0 ]] && grep -q \"Atualizando o bundle 'alpha': v0.9.0 -> v1.0.0\" <<< \"\$1\" && ! grep -q 'Atualizar o bundle' <<< \"\$1\"" _ "$out"
+    check "  bundle reinstalado completo" diff -r "$PKGT/bundles/alpha" "$LD/bundles/alpha"
+    "$PKGT/install.sh" --yes --logo >/dev/null 2>&1
+fi
 
 section "Instalador: contorno do menu"
 lmenu() { sed -n '/^+ boot_menu/,/^}/p' "$LT/theme.txt" | grep -v '^[[:space:]]*#' | grep -c 'menu_pixmap_style'; }
@@ -800,6 +808,19 @@ check "instalacao segue sem bundles (rc=0)" test "$rc" = 0
 check "bundle invalido do pacote e ignorado com aviso" grep -q 'bundles/quebrado ignorado' <<< "$out"
 check "nenhum bundle instalado" test -z "$(bundle_dirs "$K/var/lib/kawaii-arch-manager/bundles")"
 check "background.png = wallpaper padrao do pacote" cmp -s "$P2/grub-theme/background.png" "$K/boot/grub/themes/kawaii-arch-theme/background.png"
+rm -rf "$P2/bundles/quebrado"
+mkbundle "$P2/bundles/misto" misto 1.0.0 1
+mkpng "$P2/bundles/misto/backgrounds/paleta.png" 3; cp "$P2/bundles/misto/backgrounds/background1.png" "$P2/bundles/misto/backgrounds/nome invalido.png"
+out="$("$P2/install.sh" --yes --no-components 2>&1)"; rc=$?
+check "imagens invalidas de um bundle do pacote: aviso (rc=0)" bash -c "[[ $rc == 0 ]] && grep -q 'bundles/misto: 2 imagem(ns) ignorada(s)' <<< \"\$1\"" _ "$out"
+check "  so a imagem valida e instalada" test "$(ls "$K/var/lib/kawaii-arch-manager/bundles/misto/backgrounds")" = background1.png
+sed -i 's/# >>> menu-box$/# >>> outro/' "$P2/grub-theme/theme.txt"
+s0="$(cd "$K" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+out="$("$P2/install.sh" --yes --fresh --no-components 2>&1)"; rc=$?
+check "theme.txt do pacote sem marcadores: recusado antes de alterar (rc=1)" bash -c "[[ $rc == 1 ]] && grep -q 'sem os marcadores do bloco menu-box' <<< \"\$1\"" _ "$out"
+check "  nada foi alterado" test "$s0" = "$(cd "$K" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+rm "$P2/helper/grub-random-bg.sh"; cp "$PKG/grub-theme/theme.txt" "$P2/grub-theme/theme.txt"
+expect_rc 1 "helper ausente no pacote: recusado" "$P2/install.sh" --yes --no-components
 unset KAWAII_ROOT
 
 printf '\n\e[1mResultado: %d ok, %d falha(s)\e[0m\n' "$PASS" "$FAIL"
