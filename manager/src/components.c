@@ -194,6 +194,7 @@ int cmd_status(void)
     printf("  %-22s %s\n", "LOGO", c.logo);
     printf("  %-22s %s\n", "MENU_BOX", c.menu_box);
     printf("  %-22s %s\n", "TONE", c.tone);
+    printf("  %-22s %s\n", "ON_FRESH_INSTALL", c.on_fresh);
     char perr[256];
     if (prefs_check(&c, perr, sizeof perr) < 0)
         printf("  %-22s %s\n", "ERRO", perr);

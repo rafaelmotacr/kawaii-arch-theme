@@ -127,6 +127,7 @@ struct prefs {
     char logo[8];       /* on | off */
     char menu_box[8];   /* on | off */
     char tone[8];       /* auto | dark | light */
+    char on_fresh[16];  /* backup | override | keep (usado so pelo install.sh) */
 };
 int paths_init(void);
 int prefs_load(struct prefs *c, bool *exists_out);

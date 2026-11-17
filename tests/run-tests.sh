@@ -108,7 +108,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.4.0' ]]"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.5.0' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -533,6 +533,8 @@ check "  LOGO=\"off\" e logo desligado no tema" bash -c "grep -qx 'LOGO=\"off\"'
 expect_rc 0 "--logo on" "$MGR" --logo on
 check "  so as linhas alteradas diferem do modelo" test "$(diff "$PKG/config/preferences.conf" "$PF" | grep -c '^>')" = 2
 echo 'CHAVE_EXTRA="x"' >> "$PF"
+out="$("$MGR" --logo on 2>&1)"
+check "ON_FRESH_INSTALL do modelo nao gera aviso de chave desconhecida" bash -c "! grep -q 'chave desconhecida' <<< \"\$1\"" _ "$out"
 expect_rc 0 "--menu-box off com chave desconhecida no arquivo" "$MGR" --menu-box off
 check "  chave desconhecida mantida e MENU_BOX gravado" bash -c "grep -qx 'CHAVE_EXTRA=\"x\"' '$PF' && grep -qx 'MENU_BOX=\"off\"' '$PF'"
 "$MGR" --menu-box on >/dev/null 2>&1
@@ -551,6 +553,10 @@ check "  --status sem pendencia" bash -c "! '$MGR' --status | grep -q 'Pendente'
 ino="$(stat -c %i "$TT/theme.txt")"
 out="$("$MGR" --reload-confs 2>&1)"
 check "--reload-confs de novo: nada a fazer, theme.txt intacto" bash -c "grep -q 'nada a fazer' <<< \"\$1\" && [[ \$(stat -c %i '$TT/theme.txt') == $ino ]]" _ "$out"
+sed -i 's/^ON_FRESH_INSTALL=.*/ON_FRESH_INSTALL="talvez"/' "$PF"
+cp "$TT/theme.txt" "$T/theme.before"
+expect_rc 3 "ON_FRESH_INSTALL invalido: --reload-confs recusa" "$MGR" --reload-confs
+sed -i 's/^ON_FRESH_INSTALL=.*/ON_FRESH_INSTALL="backup"/' "$PF"
 sed -i 's/^LOGO=.*/LOGO="on"/; s/^MENU_BOX=.*/MENU_BOX="talvez"/' "$PF"
 cp "$TT/theme.txt" "$T/theme.before"
 expect_rc 3 "valor invalido: --reload-confs recusa" "$MGR" --reload-confs
@@ -602,7 +608,7 @@ check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundl
 check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
 check "preferences.conf criado a partir do modelo comentado" bash -c "grep -q 'reload-confs' '$LD/config/preferences.conf' && grep -qx 'LOGO=\"on\"' '$LD/config/preferences.conf' && grep -qx 'MENU_BOX=\"on\"' '$LD/config/preferences.conf'"
 check "modelo das preferencias no payload" cmp -s "$PKG/config/preferences.conf" "$L/usr/share/kawaii-arch-manager/payload/preferences.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.4.0' ]]"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.5.0' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"
@@ -654,78 +660,99 @@ if command -v script >/dev/null; then
 fi
 
 section "Instalador: instalacao limpa (--fresh)"
+check "modelo: ON_FRESH_INSTALL=\"backup\" por padrao" grep -qx 'ON_FRESH_INSTALL="backup"' "$PKG/config/preferences.conf"
+setfresh() { sed -i '/^ON_FRESH_INSTALL=/d' "$LD/config/preferences.conf"; [[ -z "$1" ]] || echo "ON_FRESH_INSTALL=\"$1\"" >> "$LD/config/preferences.conf"; }
+treesum() { (cd "$1" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum); }
 "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
-printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\n' > "$LD/config/preferences.conf"
-echo 'gothic/background1.png' > "$LD/state/last-background"
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\nLOGO="on"\nMENU_BOX="off"\nTONE="auto"\n# comentario do usuario\n' > "$LD/config/preferences.conf"
+echo 'noname/background1.png' > "$LD/state/last-background"
+cp "$LD/bundles/noname/backgrounds/background1.png" "$LT/background.png"
 echo '# personalizado' >> "$LT/theme.txt"
 touch "$T/systemctl.enabled"
 grub_before="$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
 expect_rc 1 "--fresh com --uninstall e recusado" "$PKGT/install.sh" --fresh --uninstall --yes
+expect_rc 1 "--keep-config nao existe mais" "$PKGT/install.sh" --fresh --yes --keep-config
+snap() { (cd "$L" && find . -print0 | sort -z | xargs -0 stat -c '%n %s %Y' 2>/dev/null; find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum; }
+setfresh talvez
+s0="$(snap)"
+out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
+check "ON_FRESH_INSTALL invalido: aborta (rc=1)" bash -c "[[ $rc == 1 ]] && grep -q 'ON_FRESH_INSTALL invalido' <<< \"\$1\"" _ "$out"
+check "  nada foi alterado" test "$s0" = "$(snap)"
 if command -v script >/dev/null; then
-    snap="$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+    setfresh backup
+    s0="$(snap)"
     printf 'n\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --menu-box --bundles all --no-components" /dev/null >/dev/null 2>&1
-    check "--fresh cancelado na confirmacao nao altera nada" test "$snap" = "$(cd "$L" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
+    check "--fresh cancelado na confirmacao nao altera nada" test "$s0" = "$(snap)"
 fi
-out="$("$PKGT/install.sh" --fresh --yes --no-keep-config 2>&1)"; rc=$?
-check "--fresh --yes --no-keep-config (rc=0)" test "$rc" = 0
-check "--fresh volta o contorno do menu ao padrao (ligado)" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -v '^[[:space:]]*#' | grep -q menu_pixmap_style"
-check "avisa que o bundle fora do pacote sera perdido" grep -q 'serao perdidos: noname' <<< "$out"
-check "bundles = exatamente os do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
-check "configuracao recriada com os padroes (MODE=global)" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
-check "estado anterior apagado" test ! -e "$LD/state/last-background"
-check "theme.txt igual ao do pacote (personalizacao descartada)" bash -c "! grep -q '^# personalizado' '$LT/theme.txt'"
-check "componentes reinstalados" bash -c "[[ -x '$L/usr/bin/kawaii-arch-manager' && -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
-check "servico nao volta habilitado sem --enable-service" test ! -e "$T/systemctl.enabled"
-check "/etc/default/grub e grub.cfg preservados" test "$grub_before" = "$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
-check "sem diretorios temporarios restantes" bash -c "! ls -A '$LD/bundles' '$L/boot/grub/themes' | grep -q '^\.'"
-expect_rc 0 "--fresh --yes --enable-service" "$PKGT/install.sh" --fresh --yes --enable-service
-check "servico habilitado com --enable-service" test -e "$T/systemctl.enabled"
 
-section "Instalador: --fresh mantendo as preferencias"
-expect_rc 1 "--keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --keep-config
-expect_rc 1 "--no-keep-config sem --fresh e recusado" "$PKGT/install.sh" --yes --no-keep-config
-# modo set apontando para um bundle importado (fora do pacote)
+# backup (sem a chave: padrao do pacote)
+setfresh ""
+conf_before="$(sha256sum < "$LD/config/preferences.conf")"
+bundles_before="$(treesum "$LD/bundles")"
+out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
+check "backup (padrao): --fresh --yes (rc=0)" test "$rc" = 0
+check "  resumo mostra o modo e a origem" grep -q 'ON_FRESH_INSTALL="backup" (padrao do pacote)' <<< "$out"
+check "  bundles.old = bundles anteriores (inclusive o importado)" test "$bundles_before" = "$(treesum "$LD/bundles.old")"
+check "  config.old/preferences.conf = preferencias anteriores" test "$conf_before" = "$(sha256sum < "$LD/config.old/preferences.conf")"
+check "  bundles = exatamente os do pacote" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | sort)\" ]]"
+check "  preferencias recriadas com os padroes" bash -c "grep -qx 'MODE=\"global\"' '$LD/config/preferences.conf' && grep -qx 'ON_FRESH_INSTALL=\"backup\"' '$LD/config/preferences.conf'"
+check "  contorno do menu volta ao padrao (ligado)" bash -c "sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -v '^[[:space:]]*#' | grep -q menu_pixmap_style"
+check "  estado anterior apagado" test ! -e "$LD/state/last-background"
+check "  theme.txt igual ao do pacote (personalizacao descartada)" bash -c "! grep -q '^# personalizado' '$LT/theme.txt'"
+check "  tema sem .old" bash -c "! ls -A '$L/boot/grub/themes' | grep -q old"
+check "  componentes reinstalados" bash -c "[[ -x '$L/usr/bin/kawaii-arch-manager' && -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
+check "  servico nao volta habilitado sem --enable-service" test ! -e "$T/systemctl.enabled"
+check "  /etc/default/grub e grub.cfg preservados" test "$grub_before" = "$(cat "$L/etc/default/grub" "$L/boot/grub/grub.cfg" | sha256sum)"
+check "  sem diretorios temporarios restantes" bash -c "! ls -A '$LD' '$LD/bundles' '$L/boot/grub/themes' | grep -q '^\.'"
+check "  bundles.old fora do --list-bundles" bash -c "! KAWAII_ROOT='$L' '$L/usr/bin/kawaii-arch-manager' --list-bundles | grep -q noname"
+expect_rc 0 "recupera o bundle de bundles.old com --import-bundle" "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$LD/bundles.old/noname"
+check "  bundle recuperado" test -f "$LD/bundles/noname/manifest.conf"
+
+# backup de novo: substitui os .old
+bundles_before="$(treesum "$LD/bundles")"
+out="$("$PKGT/install.sh" --fresh --yes --enable-service 2>&1)"; rc=$?
+check "backup de novo (rc=0) avisa que substitui o backup anterior" bash -c "[[ $rc == 0 ]] && grep -q 'backup anterior .*bundles.old sera substituido' <<< \"\$1\"" _ "$out"
+check "  bundles.old = bundles do backup mais recente" test "$bundles_before" = "$(treesum "$LD/bundles.old")"
+check "  servico habilitado com --enable-service" test -e "$T/systemctl.enabled"
+
+# override: apaga; os .old existentes ficam
+old_sum="$(treesum "$LD/bundles.old")"
 "$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
-printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\nLOGO="on"\nMENU_BOX="on"\nTONE="auto"\n' > "$LD/config/preferences.conf"
+setfresh override
+out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
+check "override (rc=0) avisa que o bundle fora do pacote sera perdido" bash -c "[[ $rc == 0 ]] && grep -q 'serao perdidos: noname' <<< \"\$1\"" _ "$out"
+check "  bundle importado apagado" test ! -e "$LD/bundles/noname"
+check "  .old existentes intactos" test "$old_sum" = "$(treesum "$LD/bundles.old")"
+check "  preferencias recriadas (MODE=global)" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
+
+# keep: nada em DATA_DIR muda
+"$L/usr/bin/kawaii-arch-manager" --yes --import-bundle "$T/noname.kawall" >/dev/null 2>&1
+printf 'MODE="set"\nSELECTED_BUNDLE="noname"\nSELECTED_BACKGROUND=""\nLOGO="on"\nMENU_BOX="off"\nTONE="auto"\nON_FRESH_INSTALL="keep"\n' > "$LD/config/preferences.conf"
 echo 'noname/background1.png' > "$LD/state/last-background"
 cp "$LD/bundles/noname/backgrounds/background1.png" "$LT/background.png"
+rm -rf "$LD/bundles/$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | head -n1)"
 conf_before="$(sha256sum < "$LD/config/preferences.conf")"
+nn_before="$(treesum "$LD/bundles/noname")"
 bg_before="$(sha256sum < "$LT/background.png")"
-nn_before="$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 out="$("$PKGT/install.sh" --fresh --yes 2>&1)"; rc=$?
-check "--fresh --yes mantem a configuracao por padrao (rc=0)" test "$rc" = 0
-check "preferences.conf identico ao anterior" test "$conf_before" = "$(sha256sum < "$LD/config/preferences.conf")"
-check "estado da rotacao mantido" grep -qx 'noname/background1.png' "$LD/state/last-background"
-check "bundle importado usado pela configuracao foi mantido" test "$nn_before" = "$(cd "$LD/bundles/noname" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
-check "bundle mantido nao e anunciado como perdido" bash -c "! grep -q 'serao perdidos' <<< \"\$1\"" _ "$out"
-check "wallpaper ativo mantido" test "$bg_before" = "$(sha256sum < "$LT/background.png")"
-check "paths.conf regenerado" grep -q '^THEME_DIR="/boot/grub/themes/kawaii-arch-theme"' "$LD/config/paths.conf"
-check "guarda temporaria removida" bash -c "! ls -A '$L/var/lib' | grep -q '^\.kawaii'"
-check "helper funciona com a configuracao mantida" env KAWAII_ROOT="$L" "$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh" --dry-run --quiet >/dev/null
-# modo fixed num bundle do pacote que o usuario nao seleciona na reinstalacao
-fx_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | head -n1)"
-other_id="$(cd "$PKGT/bundles" && ls -d */ | tr -d / | sort | tail -n1)"
-fx_img="$(cd "$PKGT/bundles/$fx_id/backgrounds" && ls *.png | sort | tail -n1)"
-printf 'MODE="fixed"\nSELECTED_BUNDLE=""\nSELECTED_BACKGROUND="%s/%s"\n' "$fx_id" "$fx_img" > "$LD/config/preferences.conf"
-cp "$PKGT/bundles/$other_id/backgrounds/$(cd "$PKGT/bundles/$other_id/backgrounds" && ls *.png | head -n1)" "$LT/background.png"
-out="$("$PKGT/install.sh" --fresh --yes --keep-config --no-components --bundles "$other_id" 2>&1)"; rc=$?
-check "--fresh --keep-config --bundles $other_id (rc=0)" test "$rc" = 0
-check "bundle do wallpaper fixo incluido automaticamente" bash -c "[[ -d '$LD/bundles/$fx_id' && -d '$LD/bundles/$other_id' ]]"
-check "inclusao automatica e informada" grep -q "Bundle '$fx_id' incluido" <<< "$out"
-check "wallpaper ativo = wallpaper fixo configurado" cmp -s "$PKGT/bundles/$fx_id/backgrounds/$fx_img" "$LT/background.png"
-check "modo fixed mantido" grep -qx "SELECTED_BACKGROUND=\"$fx_id/$fx_img\"" "$LD/config/preferences.conf"
-check "bundle importado nao referenciado foi apagado" test ! -e "$LD/bundles/noname"
-if command -v script >/dev/null; then
-    out="$(printf 'n\ns\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --fresh --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
-    check "pergunta sobre manter a configuracao no --fresh interativo" grep -q 'Manter as preferencias' <<< "$out"
-    check "respondendo 'n', a configuracao volta ao padrao" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
-    out="$(printf 's\n' | KAWAII_ROOT="$L" script -qec "'$PKGT/install.sh' --no-logo --menu-box --bundles all --no-components" /dev/null 2>&1)"
-    check "reinstalacao normal (sem --fresh) nao faz a pergunta" bash -c "! grep -q 'Manter as preferencias' <<< \"\$1\"" _ "$out"
-fi
+check "keep (rc=0)" test "$rc" = 0
+check "  preferences.conf identico" test "$conf_before" = "$(sha256sum < "$LD/config/preferences.conf")"
+check "  bundle importado identico" test "$nn_before" = "$(treesum "$LD/bundles/noname")"
+check "  estado da rotacao mantido" grep -qx 'noname/background1.png' "$LD/state/last-background"
+check "  wallpaper ativo mantido" test "$bg_before" = "$(sha256sum < "$LT/background.png")"
+check "  contorno do menu segue MENU_BOX=\"off\"" bash -c "! sed -n '/^+ boot_menu/,/^}/p' '$LT/theme.txt' | grep -v '^[[:space:]]*#' | grep -q menu_pixmap_style"
+check "  bundle do pacote ausente foi instalado" bash -c "[[ \"\$(cd '$PKGT/bundles' && ls -d */ | tr -d / | sort)\" == \"\$(cd '$LD/bundles' && ls -d */ | tr -d / | grep -v noname | sort)\" ]]"
+check "  componentes reinstalados" test -x "$L/usr/bin/kawaii-arch-manager"
+check "  paths.conf regenerado" grep -q '^THEME_DIR="/boot/grub/themes/kawaii-arch-theme"' "$LD/config/paths.conf"
+check "  copia temporaria do wallpaper removida" bash -c "! ls -A '$LD' | grep -q '^\.'"
+check "  helper funciona com os dados mantidos" bash -c "KAWAII_ROOT='$L' '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' --dry-run --quiet >/dev/null"
+check "--status mostra ON_FRESH_INSTALL" bash -c "KAWAII_ROOT='$L' '$L/usr/bin/kawaii-arch-manager' --status | grep -qE 'ON_FRESH_INSTALL +keep'"
+setfresh backup
 
 expect_rc 0 "--uninstall --yes" "$PKGT/install.sh" --uninstall --yes
 check "tema e componentes removidos, dados preservados" bash -c "[[ ! -e '$LT' && -d '$LD/bundles' && ! -e '$L/usr/bin/kawaii-arch-manager' && ! -e '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico desabilitado na remocao" test ! -e "$T/systemctl.enabled"
+check "--uninstall preserva os .old" bash -c "[[ -d '$LD/bundles.old' && -d '$LD/config.old' ]]"
 
 section "Instalador: dependencia servico -> helper"
 S="$T/svc-root"; mkdir -p "$S/boot/grub"

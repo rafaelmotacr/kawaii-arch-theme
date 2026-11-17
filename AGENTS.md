@@ -22,8 +22,8 @@ script" para um sistema modular:
 | Bundle | coleção de wallpapers: `manifest.conf` + `backgrounds/*.png` | `bundles/<id>/` (local, não versionado) → `/var/lib/kawaii-arch-manager/bundles/<id>/` |
 | `.kawall` | tar de um bundle, com raiz `<id>/` | gerado por `tools/make-kawall.sh` |
 | Payload | cópia local do helper, do modelo da unidade, do modelo `preferences.conf` e dos `.kawall` de `bundles/`, usada pelo manager para instalar/atualizar | `/usr/share/kawaii-arch-manager/payload/` |
-| Preferências | `preferences.conf`: MODE, SELECTED_BUNDLE, SELECTED_BACKGROUND, LOGO, MENU_BOX, TONE; **fonte da verdade** (o `theme.txt` é derivado) | `config/preferences.conf` (modelo comentado) → `/var/lib/kawaii-arch-manager/config/` |
-| Dados | `config/preferences.conf`, `config/paths.conf` (caminhos, gerado), `state/last-background`, locks | `/var/lib/kawaii-arch-manager/` |
+| Preferências | `preferences.conf`: MODE, SELECTED_BUNDLE, SELECTED_BACKGROUND, LOGO, MENU_BOX, TONE, ON_FRESH_INSTALL; **fonte da verdade** (o `theme.txt` é derivado) | `config/preferences.conf` (modelo comentado) → `/var/lib/kawaii-arch-manager/config/` |
+| Dados | `config/preferences.conf`, `config/paths.conf` (caminhos, gerado), `state/last-background`, locks; `bundles.old/` e `config.old/` (backup do `--fresh`) | `/var/lib/kawaii-arch-manager/` |
 
 ## 2. Regras que não podem ser quebradas
 
@@ -56,7 +56,8 @@ Herdadas da especificação original (e cobertas pelos testes):
 9. **SemVer independente por componente, sem downgrade automático.** Versão
    inválida conta como `0.0.0`.
 10. **Preservar dados do usuário:** atualizar ou reinstalar não apaga bundles
-    nem `preferences.conf`. Só `--fresh` (com confirmação) e
+    nem `preferences.conf`. Só `--fresh` (com confirmação, conforme
+    `ON_FRESH_INSTALL`; o padrão `backup` move os dados para `*.old`) e
     `--uninstall --purge` apagam dados.
 11. **Instalador idempotente:** uma segunda execução não altera nada sem
     motivo, não roda `daemon-reload` sem necessidade e não muda o estado do
@@ -80,7 +81,8 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
    de ~3,5:1 até sobre branco puro (~7:1 no caso típico). Limite: o GRUB não
    desfoca nem adapta a caixa ao wallpaper; uma imagem fixa serve para
    todos.
-2. **`--fresh` com `--keep-config` / `--no-keep-config`** (tema 2.1.0).
+2. **`--fresh` com `--keep-config` / `--no-keep-config`** (tema 2.1.0;
+   substituído pelo `ON_FRESH_INSTALL`, item 9).
    Pergunta feita **só** no `--fresh` (as outras execuções já preservam a
    configuração), com padrão "sim". Mantém o arquivo de preferências (hoje `preferences.conf`),
    `last-background` e o wallpaper ativo (no modo `fixed`, a imagem fixa).
@@ -172,7 +174,8 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
    `/var/lib/kawaii-arch-manager/config/preferences.conf` (substitui o
    `backgrounds.conf`, sem migração: ver `RULES.md`). O serviço fica fora.
    - Chaves: `MODE`, `SELECTED_BUNDLE`, `SELECTED_BACKGROUND`, `LOGO`,
-     `MENU_BOX` (`on|off`), `TONE` (`auto|dark|light`). O modelo comentado
+     `MENU_BOX` (`on|off`), `TONE` (`auto|dark|light`) e, desde o item 9,
+     `ON_FRESH_INSTALL`. O modelo comentado
      `config/preferences.conf` é a fonte única dos padrões; o instalador o
      copia na primeira instalação e para o payload.
    - Gravação no lugar: o manager (`prefs_save`) e o instalador
@@ -189,6 +192,25 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      `--fresh` sem manter as preferências volta aos padrões.
    - `TONE`: o helper força `dark`/`light`; `auto` mede o wallpaper.
    - `--status` mostra as preferências e avisa quando o `theme.txt` difere.
+
+9. **Backup no `--fresh`: `ON_FRESH_INSTALL`** (manager 1.5.0). Nova chave
+   do `preferences.conf`, lida só pelo `install.sh --fresh` (o manager
+   apenas valida e mostra no `--status`):
+   - `backup` (padrão): `mv` de `bundles/` e `config/` para `bundles.old/` e
+     `config.old/` em `DATA_DIR` antes de apagar qualquer coisa (`backup_data`);
+     uma geração; os `.old` anteriores vão para uma guarda e só são apagados
+     depois do sucesso; uma falha desfaz os movimentos;
+   - `override`: apaga tudo em `DATA_DIR`, exceto os `*.old`;
+   - `keep`: não toca em `DATA_DIR`; o wallpaper ativo é guardado em
+     `DATA_DIR/.background.keep.<pid>.png` durante a troca do tema;
+   - o tema em `/boot` nunca tem `.old`;
+   - sem arquivo ou sem chave: padrão do modelo do pacote; valor inválido
+     aborta antes de qualquer pergunta ou alteração;
+   - substituiu `--keep-config`/`--no-keep-config`, a pergunta "Manter as
+     preferências" e a inclusão automática do bundle referenciado (sem
+     compatibilidade: ver `RULES.md`);
+   - recuperação: `--import-bundle bundles.old/<id>` e cópia manual de
+     `config.old/preferences.conf` + `--reload-confs`.
 
 ## 4. Convenções
 
@@ -239,7 +261,7 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 3.1.1, manager 1.4.0, helper 2.2.0, unidade rev 2.
+Versões atuais: tema 3.1.1, manager 1.5.0, helper 2.2.0, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 

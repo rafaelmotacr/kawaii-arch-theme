@@ -268,7 +268,7 @@ bool mode_valid(const char *m)
 bool onoff_valid(const char *v) { return !strcmp(v, "on") || !strcmp(v, "off"); }
 bool tone_valid(const char *v) { return !strcmp(v, "auto") || !strcmp(v, "dark") || !strcmp(v, "light"); }
 
-static const char *const PREF_KEYS[] = {"MODE", "SELECTED_BUNDLE", "SELECTED_BACKGROUND", "LOGO", "MENU_BOX", "TONE"};
+static const char *const PREF_KEYS[] = {"MODE", "SELECTED_BUNDLE", "SELECTED_BACKGROUND", "LOGO", "MENU_BOX", "TONE", "ON_FRESH_INSTALL"};
 #define NPREF_KEYS (sizeof PREF_KEYS / sizeof PREF_KEYS[0])
 
 /* Chave ausente = padrao (o mesmo do modelo config/preferences.conf) */
@@ -279,6 +279,7 @@ int prefs_load(struct prefs *c, bool *exists_out)
     snprintf(c->logo, sizeof c->logo, "on");
     snprintf(c->menu_box, sizeof c->menu_box, "on");
     snprintf(c->tone, sizeof c->tone, "auto");
+    snprintf(c->on_fresh, sizeof c->on_fresh, "backup");
     int e;
     struct kv_list *l = kv_load(P.prefs_conf, &e);
     if (exists_out)
@@ -302,6 +303,8 @@ int prefs_load(struct prefs *c, bool *exists_out)
         snprintf(c->menu_box, sizeof c->menu_box, "%s", v);
     if ((v = kv_get(l, "TONE")) && *v)
         snprintf(c->tone, sizeof c->tone, "%s", v);
+    if ((v = kv_get(l, "ON_FRESH_INSTALL")) && *v)
+        snprintf(c->on_fresh, sizeof c->on_fresh, "%s", v);
     kv_free(l);
     return KAM_OK;
 }
@@ -318,6 +321,8 @@ int prefs_check(const struct prefs *c, char *err, size_t errsz)
         snprintf(err, errsz, "MENU_BOX invalido: \"%s\" (on | off)", c->menu_box);
     else if (!tone_valid(c->tone))
         snprintf(err, errsz, "TONE invalido: \"%s\" (auto | dark | light)", c->tone);
+    else if (strcmp(c->on_fresh, "backup") && strcmp(c->on_fresh, "override") && strcmp(c->on_fresh, "keep"))
+        snprintf(err, errsz, "ON_FRESH_INSTALL invalido: \"%s\" (backup | override | keep)", c->on_fresh);
     else
         return 0;
     return -1;
@@ -383,7 +388,7 @@ static int sbuf_kv(struct sbuf *b, const char *key, const char *val)
 
 int prefs_save(const struct prefs *c)
 {
-    const char *vals[NPREF_KEYS] = {c->mode, c->bundle, c->background, c->logo, c->menu_box, c->tone};
+    const char *vals[NPREF_KEYS] = {c->mode, c->bundle, c->background, c->logo, c->menu_box, c->tone, c->on_fresh};
     bool done[NPREF_KEYS] = {false};
     char tpl[PATH_MAX];
     size_t len = 0;

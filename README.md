@@ -31,7 +31,7 @@ com imagens que você tenha direito de usar (ver
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
 | Tema GRUB | 3.1.1 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.4.0 | `/usr/bin/kawaii-arch-manager` | não |
+| Kawaii Arch Manager (C, binário nativo) | 1.5.0 | `/usr/bin/kawaii-arch-manager` | não |
 | Background Helper (bash) | 2.2.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
@@ -98,7 +98,6 @@ Opções:
 | `--menu-box` / `--no-menu-box` | exibe ou oculta o contorno de vidro em volta do menu de boot |
 | `--grub-dir DIR` | diretório do GRUB (padrão: detectado) |
 | `--fresh` | instalação limpa |
-| `--keep-config` / `--no-keep-config` | só com `--fresh`: mantém ou descarta as preferências |
 | `--uninstall [--purge]` | remove o tema e os componentes |
 
 ### Reinstalação e atualização
@@ -123,34 +122,48 @@ Quando altera `/etc/default/grub`, o instalador salva um backup em
 
 ### Instalação limpa (`--fresh`)
 
-Apaga tudo o que foi instalado e reinstala a partir da pasta do projeto, como
-numa máquina nova: tema (inclusive o wallpaper ativo e qualquer alteração no
-`theme.txt`), manager e payload, helper, unidade systemd e
-`/var/lib/kawaii-arch-manager` (bundles, `preferences.conf` e estado). A
-exceção são as preferências, se você escolher mantê-las.
+Apaga o tema (inclusive o wallpaper ativo e qualquer alteração no
+`theme.txt`), o manager e o payload, o helper e a unidade systemd, e os
+reinstala a partir da pasta do projeto, como numa máquina nova. O tema em
+`/boot` não ganha backup: ele sempre vem do pacote.
+
+O que acontece com os seus dados em `/var/lib/kawaii-arch-manager` depende
+de `ON_FRESH_INSTALL` no [`preferences.conf`](#preferências):
+
+| | `backup` (padrão) | `override` | `keep` |
+|---|---|---|---|
+| `bundles/` | movido para `bundles.old/` | apagado | mantido |
+| `config/` (preferências) | movido para `config.old/` | apagado | mantido |
+| `state/` (rotação) | apagado | apagado | mantido |
+| wallpaper ativo | volta ao padrão | volta ao padrão | mantido |
+| bundles e preferências novos | os do pacote, com os padrões | igual | os atuais; bundles do pacote que faltam são instalados |
+| `*.old` já existentes | substituídos | intactos | intactos |
+
+- O `backup` é um `mv` na mesma partição: é atômico e não ocupa espaço
+  extra. Há uma única geração; um novo `backup` substitui a anterior, e o
+  instalador avisa antes de confirmar. Os `.old` antigos só são descartados
+  depois que os novos estão no lugar, e uma falha desfaz tudo antes de
+  qualquer remoção.
+- Se o `preferences.conf` não existir (ou não tiver a chave), vale o padrão
+  `backup`. Um valor inválido aborta sem alterar nada.
+- **Recuperar dados do backup:**
+
+  ```bash
+  # um bundle (com as mesmas validações de qualquer importação)
+  sudo kawaii-arch-manager --import-bundle /var/lib/kawaii-arch-manager/bundles.old/<id>
+  # as preferências
+  sudo cp /var/lib/kawaii-arch-manager/config.old/preferences.conf /var/lib/kawaii-arch-manager/config/
+  sudo kawaii-arch-manager --reload-confs
+  ```
 
 - Todas as perguntas e a confirmação vêm **antes** de apagar qualquer coisa.
-  O instalador lista o que será removido e aponta os bundles instalados que
-  não estão na pasta local `bundles/` (por exemplo, os importados com
-  `--import-bundle`), porque eles serão perdidos. Para mantê-los, copie as
-  pastas deles de `/var/lib/kawaii-arch-manager/bundles/` para `bundles/`
-  antes de rodar o `--fresh`. A confirmação é `[s/N]`; com `--yes`, o próprio
+  O resumo mostra o valor de `ON_FRESH_INSTALL` e de onde ele veio, o que
+  vai para o backup e, no `override`, os bundles fora da pasta `bundles/`
+  que serão perdidos. A confirmação é `[s/N]`; com `--yes`, o próprio
   `--fresh` vale como confirmação.
-- **Manter as preferências.** Se existir um `preferences.conf`, o
-  instalador mostra o modo atual e pergunta se ele deve ser mantido
-  (`[S/n]`; com `--yes`, mantém). Ao manter:
-  - `preferences.conf` (wallpaper, logo, contorno do menu e tom) e
-    `state/last-background` voltam intactos; `paths.conf` é regenerado;
-  - o wallpaper ativo continua o mesmo; no modo `fixed`, é o wallpaper fixo
-    escolhido;
-  - se a configuração usa um bundle da pasta `bundles/` que não foi
-    selecionado, ele é incluído automaticamente; se usa um bundle importado,
-    esse bundle é preservado.
-
-  `--keep-config` e `--no-keep-config` decidem sem perguntar. Se o
-  instalador falhar no meio, ele informa onde guardou as preferências.
-- As demais perguntas usam os padrões de uma instalação nova: o serviço só
-  volta habilitado com `--enable-service` ou se você escolher.
+- As demais perguntas usam os padrões de uma instalação nova (no `keep`, o
+  logo e o contorno seguem o `preferences.conf`). O serviço só volta
+  habilitado com `--enable-service` ou se você escolher.
 - `/etc/default/grub` e `grub.cfg` são preservados.
 - Combina com as demais opções. Não combina com `--uninstall`.
 
@@ -161,7 +174,8 @@ sudo ./install.sh --uninstall           # remove serviço, helper, manager e tem
 sudo ./install.sh --uninstall --purge   # também apaga bundles, configuração e estado
 ```
 
-Sem `--purge`, os dados em `/var/lib/kawaii-arch-manager` são preservados.
+Sem `--purge`, os dados em `/var/lib/kawaii-arch-manager` são preservados,
+inclusive os backups `*.old`; com `--purge`, eles também são apagados.
 O instalador oferece comentar o `GRUB_THEME` em `/etc/default/grub` e
 regenerar o `grub.cfg`.
 
@@ -291,6 +305,7 @@ SELECTED_BACKGROUND=""     # ID/arquivo.png, usado no modo fixed
 LOGO="on"                  # on | off
 MENU_BOX="on"              # on | off: contorno de vidro do menu
 TONE="auto"                # auto | dark | light
+ON_FRESH_INSTALL="backup"  # backup | override | keep: dados no install.sh --fresh
 ```
 
 Para mudar, edite o arquivo e aplique sem reinstalar:
@@ -507,7 +522,7 @@ bundles. Não exigem root nem alteram o sistema. Cobrem:
   fallback) e o diretório do tema bind-montado, como faz o `ReadWritePaths=`;
 - instalação completa, seleção de bundles, pacote sem bundles, atualização
   sem downgrade, idempotência, `--fresh` (inclusive cancelamento e
-  `--keep-config`), dependência serviço → helper e remoção.
+  `ON_FRESH_INSTALL` backup, override e keep), dependência serviço → helper e remoção.
 
 ### Ferramentas
 
@@ -566,7 +581,7 @@ visuais novos compatíveis, major para mudanças incompatíveis. O
 | Substituição atômica; falha preserva o anterior | `.tmp` + `rename(2)`; testes de falha |
 | Não escreve com `/boot` desmontado | `EXPECTED_MOUNT` + `fstab` (rc 5) |
 | Versões independentes, sem downgrade | SemVer por componente; `--status` / `--update` |
-| Reinstalação preserva dados e configuração | testes de atualização, idempotência e `--keep-config` |
+| Reinstalação preserva dados e configuração | testes de atualização, idempotência e `ON_FRESH_INSTALL` |
 | Troca de wallpaper sem `grub-mkconfig` | teste com `grub-mkconfig` falso |
 | Logo e contorno opcionais sem mudar o layout | blocos alternados no `theme.txt`; testes de ida e volta |
 | Tom ajustado sem quebrar o tema | só linhas gerenciadas do `theme.txt`, escrita atômica e só quando muda; sem o manager, tom `dark` |

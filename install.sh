@@ -18,12 +18,13 @@
 #                                            componentes; so habilita o servico
 #                                            se ja estava habilitado ou com
 #                                            --enable-service)
-#    sudo ./install.sh --fresh               instalacao limpa: apaga tema,
-#                                            componentes, bundles, configuracao
-#                                            e estado, e reinstala a partir do
-#                                            pacote (pede confirmacao; pergunta
-#                                            se as preferencias devem ser
-#                                            mantidas)
+#    sudo ./install.sh --fresh               instalacao limpa: apaga tema e
+#                                            componentes e reinstala a partir
+#                                            do pacote (pede confirmacao). Os
+#                                            dados seguem ON_FRESH_INSTALL do
+#                                            preferences.conf: backup (move
+#                                            bundles/ e config/ para *.old),
+#                                            override (apaga) ou keep (mantem)
 #    sudo ./install.sh --uninstall [--purge] remove tema e componentes
 #                                            (--purge apaga bundles/config)
 #  Opcoes:
@@ -36,11 +37,6 @@
 #                           --yes, all)
 #    --no-bundles           o mesmo que --bundles none
 #    --enable-service       habilita o servico (consentimento explicito)
-#    --keep-config | --no-keep-config
-#                           so com --fresh: mantem (ou descarta) o modo de
-#                           troca de wallpapers / wallpaper fixo, o estado da
-#                           rotacao e o wallpaper ativo (padrao: pergunta;
-#                           com --yes, mantem)
 #    --logo | --no-logo     exibe/oculta o logo da distribuicao abaixo do menu
 #    --menu-box | --no-menu-box
 #                           exibe/oculta o contorno de vidro do menu de boot
@@ -95,7 +91,6 @@ OPT_GRUB_DIR=""
 OPT_PURGE=0
 OPT_BUNDLES=""      # "" pergunta | all | none | id1,id2
 FRESH=0             # --fresh: apaga tudo e reinstala
-OPT_KEEP_CONFIG=""  # --fresh: "" pergunta | 1 mantem | 0 descarta a config de wallpapers
 
 # Estado
 GRUB_DEFAULT_CHANGED=0
@@ -106,10 +101,9 @@ declare -A RESULT=()
 PKG_BUNDLES=()        # IDs validos encontrados em bundles/ do pacote
 declare -A PKG_NAME=() PKG_VER=() PKG_COUNT=()
 WANT_BUNDLES=()
-KEEP_CONFIG=0         # --fresh: manter preferences.conf, estado e wallpaper ativo
-KEEP_REFS=()          # bundles referenciados pela configuracao mantida
-KEEP_BUNDLES=()       # desses, os que nao estao no pacote (preservados no wipe)
-KEEP_DIR=""           # guarda temporaria durante o --fresh
+FRESH_MODE=""          # --fresh: ON_FRESH_INSTALL (backup | override | keep)
+FRESH_MODE_SRC=""      # de onde veio o valor (para o resumo)
+KEEP_BG=""             # --fresh keep: copia do wallpaper ativo durante a remocao
 
 # ---------------------------------------------------------------------
 # Utilitarios
@@ -402,7 +396,7 @@ decide() {   # decide OPT pergunta-instalar default -> echo install|skip
 plan() {
     if ((FRESH)); then
         plan_fresh
-        if ((!KEEP_CONFIG)); then   # instalacao limpa sem manter: padroes do pacote
+        if [[ "$FRESH_MODE" != keep ]]; then   # dados descartados: padroes do pacote
             OLD_LOGO_STATE=""; OLD_MENU_STATE=""
         fi
     fi
@@ -593,7 +587,7 @@ plan_bundles() {
     local i id inst
     for i in "${!PKG_BUNDLES[@]}"; do
         id="${PKG_BUNDLES[i]}"; inst=""
-        ((!FRESH)) && [[ -f "$BUNDLES_DIR/$id/manifest.conf" ]] && inst="  [instalado: v$(conf_get "$BUNDLES_DIR/$id/manifest.conf" VERSION)]"
+        [[ "$FRESH_MODE" == "" || "$FRESH_MODE" == keep ]] && [[ -f "$BUNDLES_DIR/$id/manifest.conf" ]] && inst="  [instalado: v$(conf_get "$BUNDLES_DIR/$id/manifest.conf" VERSION)]"
         note "$(printf '%2d) %-16s %-20s v%-8s %3d imagens%s' $((i + 1)) "$id" "${PKG_NAME[$id]}" "${PKG_VER[$id]}" "${PKG_COUNT[$id]}" "$inst")"
     done
     if [[ -n "$OPT_BUNDLES" ]]; then
@@ -608,14 +602,6 @@ plan_bundles() {
             select_bundles_from "$answer" && break
         done
     fi
-    # Configuracao mantida no --fresh: o bundle do modo 'set' ou do wallpaper
-    # fixo precisa existir depois da reinstalacao
-    local ref
-    for ref in "${KEEP_REFS[@]}"; do
-        [[ " ${PKG_BUNDLES[*]} " == *" $ref "* && " ${WANT_BUNDLES[*]} " != *" $ref "* ]] || continue
-        WANT_BUNDLES+=("$ref")
-        note "Bundle '$ref' incluido: e usado pelas preferencias mantidas"
-    done
     if ((${#WANT_BUNDLES[@]})); then
         note "Selecionados: ${WANT_BUNDLES[*]}"
     else
@@ -721,13 +707,8 @@ set_menu() {   # set_menu ARQUIVO on|off
 # aleatoria dos bundles instalados ou o padrao do pacote
 initial_background() {   # -> caminho da imagem de origem
     local old="$1" f
-    # --fresh mantendo a configuracao: o wallpaper fixo escolhido ou,
-    # nos demais modos, o wallpaper que estava ativo
-    if ((KEEP_CONFIG)); then
-        f="$(fixed_background_path)"
-        if [[ -n "$f" ]] && png_ok "$f"; then echo "$f"; return; fi
-        if [[ -n "$KEEP_DIR" ]] && png_ok "$KEEP_DIR/background.png"; then echo "$KEEP_DIR/background.png"; return; fi
-    fi
+    # --fresh com ON_FRESH_INSTALL=keep: o wallpaper que estava ativo
+    if [[ -n "$KEEP_BG" ]] && png_ok "$KEEP_BG"; then echo "$KEEP_BG"; return; fi
     if png_ok "$old/background.png"; then echo "$old/background.png"; return; fi
     local -a dirs=()
     local id
@@ -792,7 +773,7 @@ install_theme() {
         mv "$new" "$THEME_DIR" || die "falha ao instalar o tema"
     fi
     sync -f "$THEME_DIR" 2>/dev/null || sync
-    if [[ -n "$KEEP_DIR" && "$bg" == "$KEEP_DIR/"* ]]; then
+    if [[ -n "$KEEP_BG" && "$bg" == "$KEEP_BG" ]]; then
         info "Tema v$src_ver instalado; wallpaper ativo: o mesmo de antes da reinstalacao"
     else
         info "Tema v$src_ver instalado; wallpaper ativo: $(raw_path "$bg")"
@@ -1139,42 +1120,53 @@ remove_installation() {
 # alteracao, como as demais perguntas)
 plan_fresh() {
     section "Instalacao limpa (--fresh)"
+    read_fresh_mode
     local any=0
     [[ -d "$THEME_DIR" || -e "$BIN_PATH" || -d "$SHARE_DIR" || -f "$HELPER_PATH" || -f "$UNIT_PATH" || -d "$DATA_DIR" ]] && any=1
     if ((!any)); then
         note "Nada instalado; equivale a uma instalacao normal."
-        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha preferencias a manter."
         return 0
     fi
+    note "ON_FRESH_INSTALL=\"$FRESH_MODE\" ($FRESH_MODE_SRC)"
 
-    plan_keep_config
-
-    local -a items=() lost=()
-    if ((KEEP_CONFIG)); then
-        [[ -d "$THEME_DIR" ]] && items+=("tema em $THEME_RAW (o wallpaper ativo sera mantido)")
-    else
-        [[ -d "$THEME_DIR" ]] && items+=("tema em $THEME_RAW (inclui o wallpaper ativo)")
+    local -a items=() ids=() lost=()
+    local i id d
+    if [[ -d "$THEME_DIR" ]]; then
+        if [[ "$FRESH_MODE" == keep ]]; then items+=("tema em $THEME_RAW (o wallpaper ativo sera mantido)")
+        else items+=("tema em $THEME_RAW (inclui o wallpaper ativo)"); fi
     fi
     [[ -e "$BIN_PATH" || -d "$SHARE_DIR" ]] && items+=("Kawaii Arch Manager ($(raw_path "$BIN_PATH")) e payload")
     [[ -f "$HELPER_PATH" ]] && items+=("Background Helper ($(raw_path "$HELPER_PATH"))")
     [[ -f "$UNIT_PATH" ]] && items+=("servico systemd ($(service_enabled && echo habilitado || echo desabilitado); volta habilitado so com --enable-service ou se voce escolher)")
-    if [[ -d "$DATA_DIR" ]]; then
-        if ((KEEP_CONFIG)); then
-            items+=("dados em $(raw_path "$DATA_DIR"): bundles (exceto os usados pela configuracao mantida)")
-        else
-            items+=("dados em $(raw_path "$DATA_DIR"): bundles, configuracao e estado")
-        fi
-    fi
+    [[ "$FRESH_MODE" != keep && -d "$DATA_DIR" ]] && items+=("dados em $(raw_path "$DATA_DIR"): bundles, preferencias e estado")
     note "Sera APAGADO e depois reinstalado a partir do pacote:"
-    local i id
     for i in "${items[@]}"; do note " - $i"; done
-    if ((KEEP_CONFIG)); then
-        note "Mantido: preferencias ($(describe_bg_config)), estado da rotacao${KEEP_BUNDLES[*]:+ e o(s) bundle(s) importado(s) ${KEEP_BUNDLES[*]}}."
+
+    if [[ -d "$DATA_DIR" ]]; then
+        while IFS= read -r id; do ids+=("$id"); done < <(installed_bundles)
+        case "$FRESH_MODE" in
+            backup)
+                note "Backup antes de apagar (em $(raw_path "$DATA_DIR")):"
+                [[ -d "$BUNDLES_DIR" ]] && note " - bundles/ -> bundles.old/${ids[*]:+ (${ids[*]})}"
+                [[ -d "$CONF_DIR" ]] && note " - config/ -> config.old/ (preferencias)"
+                for d in bundles config; do
+                    [[ -d "$DATA_DIR/$d" && -e "$DATA_DIR/$d.old" ]] \
+                        && warn "o backup anterior $(raw_path "$DATA_DIR/$d.old") sera substituido"
+                done
+                ;;
+            override)
+                for id in "${ids[@]}"; do
+                    [[ " ${PKG_BUNDLES[*]} " == *" $id "* ]] || lost+=("$id")
+                done
+                ((${#lost[@]})) && warn "bundles instalados que NAO estao no pacote serao perdidos: ${lost[*]} (use ON_FRESH_INSTALL=\"backup\" ou \"keep\" para nao perde-los)"
+                compgen -G "$DATA_DIR/*.old" >/dev/null && note "Backups existentes (*.old) nao sao alterados."
+                ;;
+            keep)
+                note "Mantidos sem alteracao: bundles${ids[*]:+ (${ids[*]})}, preferencias e estado em $(raw_path "$DATA_DIR")."
+                ;;
+        esac
     fi
-    while IFS= read -r id; do
-        [[ " ${PKG_BUNDLES[*]} " == *" $id "* || " ${KEEP_BUNDLES[*]} " == *" $id "* ]] || lost+=("$id")
-    done < <(installed_bundles)
-    ((${#lost[@]})) && warn "bundles instalados que NAO estao no pacote serao perdidos: ${lost[*]}"
+    note "Para mudar o que acontece com os dados: ON_FRESH_INSTALL em $(raw_path "$PREFS") (backup | override | keep)."
     note "Preservados: $(raw_path "$DEFAULT_GRUB") e $(raw_path "$GRUB_CFG")."
     if ((ASSUME_YES)); then
         note "Confirmado por --fresh --yes."
@@ -1184,147 +1176,99 @@ plan_fresh() {
     return 0
 }
 
-# --- Preferencias mantidas no --fresh ---------------------------------
-# Mantidos: preferences.conf (wallpaper, logo, contorno do menu, tom),
-# state/last-background (evita repetir o ultimo wallpaper), o wallpaper
-# ativo e, se a configuracao apontar para um bundle importado (fora do
-# pacote), esse bundle. paths.conf e sempre regenerado.
+# --- Instalacao limpa: ON_FRESH_INSTALL -------------------------------
+# O que o --fresh faz com os dados em DATA_DIR (o tema em /boot nunca tem
+# .old: e sempre apagado e reinstalado):
+#   backup    move bundles/ e config/ para bundles.old/ e config.old/ (uma
+#             geracao: substitui os .old anteriores) e apaga o resto
+#   override  apaga bundles/, config/ e state/ (os .old existentes ficam)
+#   keep      nao altera DATA_DIR; o wallpaper ativo e mantido
 
-describe_bg_config() {
-    local mode sel
-    mode="$(conf_get "$PREFS" MODE || true)"
-    case "$mode" in
-        fixed) sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"; echo "modo fixed, wallpaper fixo: ${sel:-nenhum}" ;;
-        set)   sel="$(conf_get "$PREFS" SELECTED_BUNDLE || true)"; echo "modo set, bundle: ${sel:-nenhum}" ;;
-        global|balanced) echo "modo $mode" ;;
-        *)     echo "MODE=\"$mode\"" ;;
+# Le ON_FRESH_INSTALL do preferences.conf instalado (ausente: padrao do
+# modelo do pacote). Valor invalido aborta antes de qualquer alteracao.
+read_fresh_mode() {
+    local v="" src
+    src="$(raw_path "$PREFS")"
+    [[ -f "$PREFS" ]] && v="$(conf_get "$PREFS" ON_FRESH_INSTALL || true)"
+    if [[ -z "$v" ]]; then
+        v="$(conf_get "$SRC_PREFS" ON_FRESH_INSTALL || true)"
+        src="padrao do pacote"
+    fi
+    case "$v" in
+        backup|override|keep) FRESH_MODE="$v"; FRESH_MODE_SRC="$src" ;;
+        *) die "ON_FRESH_INSTALL invalido ($src): \"$v\" (backup | override | keep); nada foi alterado" ;;
     esac
 }
 
-# IDs de bundles de que a configuracao depende (modo set / fixed)
-config_bundle_refs() {
-    local mode sel=""
-    mode="$(conf_get "$PREFS" MODE || true)"
-    case "$mode" in
-        fixed) sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"
-               [[ "$sel" == */* ]] && sel="${sel%%/*}" || sel="" ;;
-        set)   sel="$(conf_get "$PREFS" SELECTED_BUNDLE || true)" ;;
-    esac
-    [[ -n "$sel" && "$sel" =~ $ID_RE ]] && echo "$sel"
-    return 0
-}
-
-# Caminho do wallpaper fixo configurado ("" se o modo nao e fixed)
-fixed_background_path() {
-    [[ "$(conf_get "$PREFS" MODE || true)" == fixed ]] || return 0
-    local sel id name
-    sel="$(conf_get "$PREFS" SELECTED_BACKGROUND || true)"
-    [[ "$sel" == */* ]] || return 0
-    id="${sel%%/*}"; name="${sel#*/}"
-    [[ "$id" =~ $ID_RE && "$name" =~ $IMG_RE ]] || return 0
-    echo "$BUNDLES_DIR/$id/backgrounds/$name"
-}
-
-plan_keep_config() {
-    KEEP_CONFIG=0; KEEP_REFS=(); KEEP_BUNDLES=()
-    if [[ ! -f "$PREFS" ]]; then
-        [[ "$OPT_KEEP_CONFIG" == 1 ]] && note "--keep-config: nao ha preferencias a manter."
-        return 0
-    fi
-    note "Preferencias atuais: $(describe_bg_config)"
-    if [[ -n "$OPT_KEEP_CONFIG" ]]; then
-        KEEP_CONFIG="$OPT_KEEP_CONFIG"
-    elif ask_yn "Manter as preferencias (modo de troca / wallpaper fixo, logo, contorno, tom) apos a reinstalacao?" S; then
-        KEEP_CONFIG=1
-    fi
-    ((KEEP_CONFIG)) || { note "As preferencias serao recriadas com os padroes (MODE=global)."; return 0; }
-
-    local ref
-    while IFS= read -r ref; do
-        KEEP_REFS+=("$ref")
-        if [[ " ${PKG_BUNDLES[*]} " == *" $ref "* ]]; then
-            :   # reinstalado a partir do pacote (plan_bundles garante a selecao)
-        elif [[ -d "$BUNDLES_DIR/$ref" && ! -L "$BUNDLES_DIR/$ref" ]]; then
-            KEEP_BUNDLES+=("$ref")
-        else
-            warn "a configuracao usa o bundle '$ref', que nao esta instalado nem no pacote; o helper usara o fallback ate voce escolher outro"
+# backup: move os dados antes de apagar qualquer coisa. Os .old anteriores
+# so sao descartados depois que os novos estao no lugar; uma falha desfaz
+# os movimentos e aborta sem ter apagado nada.
+backup_data() {
+    local prev="$DATA_DIR/.old.prev.$$" d i
+    local -a from=() to=()
+    rm -rf "$prev"
+    mkdir -m 700 "$prev" || die "falha ao criar $(raw_path "$prev"); nada foi apagado"
+    for d in bundles config; do
+        [[ -d "$DATA_DIR/$d" && ! -L "$DATA_DIR/$d" ]] || continue
+        if [[ -e "$DATA_DIR/$d.old" || -L "$DATA_DIR/$d.old" ]]; then
+            from+=("$DATA_DIR/$d.old"); to+=("$prev/$d.old")
         fi
-    done < <(config_bundle_refs)
-    # O wallpaper fixo existira depois da reinstalacao? (bundle do pacote:
-    # confere no pacote; bundle importado: confere o instalado)
-    local f src id
-    f="$(fixed_background_path)"
-    if [[ -n "$f" ]]; then
-        id="${f#"$BUNDLES_DIR/"}"; id="${id%%/*}"; src="$f"
-        [[ " ${PKG_BUNDLES[*]} " == *" $id "* ]] && src="$SRC_BUNDLES/$id/backgrounds/${f##*/}"
-        png_ok "$src" || warn "o wallpaper fixo configurado ($(conf_get "$PREFS" SELECTED_BACKGROUND)) nao existe ou e invalido; o helper usara o fallback ate voce escolher outro"
-    fi
+        from+=("$DATA_DIR/$d"); to+=("$DATA_DIR/$d.old")
+    done
+    for i in "${!from[@]}"; do
+        mv -T -- "${from[i]}" "${to[i]}" && continue
+        local bad="${from[i]}"
+        while ((--i >= 0)); do mv -T -- "${to[i]}" "${from[i]}" || true; done
+        rm -rf "$prev"
+        die "falha ao mover $(raw_path "$bad") para o backup; nada foi apagado"
+    done
+    sync -f "$DATA_DIR" 2>/dev/null || sync
+    rm -rf "$prev"
+    for d in bundles config; do
+        [[ -d "$DATA_DIR/$d.old" && " ${to[*]} " == *" $DATA_DIR/$d.old "* ]] \
+            && info "Backup: $(raw_path "$DATA_DIR/$d") -> $(raw_path "$DATA_DIR/$d.old")"
+    done
     return 0
 }
 
-# Avisa onde estao os dados guardados se o instalador terminar no meio
+# keep: guarda o wallpaper ativo (o tema sera apagado) em DATA_DIR, que nao
+# e alterado; o tema novo o usa e a copia e descartada em finish_keep
 keep_exit_report() {
-    [[ -n "$KEEP_DIR" && -d "$KEEP_DIR" ]] || return 0
-    warn "as preferencias mantidas ficaram guardadas em $(raw_path "$KEEP_DIR")"
-    note "Restaure manualmente: preferences.conf -> $(raw_path "$PREFS"), last-background -> $(raw_path "$STATE_DIR")/,"
-    note "bundles/<id> -> $(raw_path "$BUNDLES_DIR")/ e background.png -> $THEME_RAW/"
+    [[ -n "$KEEP_BG" && -f "$KEEP_BG" ]] || return 0
+    warn "o wallpaper que estava ativo ficou guardado em $(raw_path "$KEEP_BG")"
 }
 
-# Guarda o que sera mantido fora de DATA_DIR (mesmo filesystem: mv e atomico)
-stash_config() {
-    ((KEEP_CONFIG)) || return 0
-    KEEP_DIR="$(dirname "$DATA_DIR")/.kawaii-arch-manager.keep.$$"
-    rm -rf "$KEEP_DIR"
-    mkdir -m 700 -p "$KEEP_DIR/bundles" || die "falha ao criar $(raw_path "$KEEP_DIR"); nada foi apagado"
+stash_background() {
+    png_ok "$THEME_DIR/background.png" || return 0
+    mkdir -p "$DATA_DIR" || die "falha ao criar $(raw_path "$DATA_DIR"); nada foi apagado"
+    KEEP_BG="$DATA_DIR/.background.keep.$$.png"
+    cp --no-preserve=all -- "$THEME_DIR/background.png" "$KEEP_BG" \
+        || { rm -f "$KEEP_BG"; KEEP_BG=""; die "falha ao guardar o wallpaper ativo; nada foi apagado"; }
     trap keep_exit_report EXIT
-    cp -p -- "$PREFS" "$KEEP_DIR/preferences.conf" || { rm -rf "$KEEP_DIR"; KEEP_DIR=""; die "falha ao guardar $(raw_path "$PREFS"); nada foi apagado"; }
-    [[ -f "$STATE_DIR/last-background" ]] && { cp -p -- "$STATE_DIR/last-background" "$KEEP_DIR/" || true; }
-    png_ok "$THEME_DIR/background.png" && { cp --no-preserve=all -- "$THEME_DIR/background.png" "$KEEP_DIR/background.png" || true; }
-    local id moved=()
-    for id in "${KEEP_BUNDLES[@]}"; do
-        if ! mv -- "$BUNDLES_DIR/$id" "$KEEP_DIR/bundles/$id"; then
-            for id in "${moved[@]}"; do mv -- "$KEEP_DIR/bundles/$id" "$BUNDLES_DIR/$id"; done
-            rm -rf "$KEEP_DIR"; KEEP_DIR=""
-            die "falha ao guardar o bundle '$id'; nada foi apagado"
-        fi
-        moved+=("$id")
-    done
-    sync -f "$KEEP_DIR" 2>/dev/null || sync
 }
 
-# Devolve configuracao, estado e bundles guardados (apos setup_data_dir)
-restore_config() {
-    [[ -n "$KEEP_DIR" ]] || return 0
-    local id
-    for id in "${KEEP_BUNDLES[@]}"; do
-        mv -- "$KEEP_DIR/bundles/$id" "$BUNDLES_DIR/$id" || die "falha ao restaurar o bundle '$id'"
-        info "Bundle '$id' mantido"
-    done
-    write_atomic "$PREFS" 644 < "$KEEP_DIR/preferences.conf" || die "falha ao restaurar $(raw_path "$PREFS")"
-    if [[ -f "$KEEP_DIR/last-background" ]]; then
-        write_atomic "$STATE_DIR/last-background" 644 < "$KEEP_DIR/last-background" || warn "estado da rotacao nao restaurado"
-    fi
-    info "Preferencias mantidas: $(describe_bg_config)"
-}
-
-# Descarta a guarda temporaria (depois que o tema ja usou o wallpaper guardado)
 finish_keep() {
-    [[ -n "$KEEP_DIR" ]] || return 0
-    rm -rf "$KEEP_DIR"; KEEP_DIR=""
+    [[ -n "$KEEP_BG" ]] || return 0
+    rm -f -- "$KEEP_BG"; KEEP_BG=""
     trap - EXIT
 }
 
 fresh_wipe() {
     [[ -d "$THEME_DIR" || -e "$BIN_PATH" || -d "$SHARE_DIR" || -f "$HELPER_PATH" || -f "$UNIT_PATH" || -d "$DATA_DIR" ]] || return 0
     section "Remocao (instalacao limpa)"
-    stash_config
+    case "$FRESH_MODE" in
+        backup) [[ -d "$DATA_DIR" ]] && backup_data ;;
+        keep)   stash_background ;;
+    esac
     remove_installation
-    rm -rf "$DATA_DIR"
-    if ((KEEP_CONFIG)); then
-        info "Instalacao anterior removida (tema, componentes e bundles); preferencias guardadas"
-    else
-        info "Instalacao anterior removida (tema, componentes, bundles, configuracao e estado)"
+    if [[ "$FRESH_MODE" != keep && -d "$DATA_DIR" ]]; then
+        find "$DATA_DIR" -mindepth 1 -maxdepth 1 ! -name bundles.old ! -name config.old -exec rm -rf -- {} +
     fi
+    case "$FRESH_MODE" in
+        backup)   info "Instalacao anterior removida (tema e componentes); bundles e preferencias em *.old" ;;
+        override) info "Instalacao anterior removida (tema, componentes, bundles, preferencias e estado)" ;;
+        keep)     info "Instalacao anterior removida (tema e componentes); bundles, preferencias e estado mantidos" ;;
+    esac
 }
 
 do_install() {
@@ -1334,7 +1278,6 @@ do_install() {
     if ((FRESH)); then fresh_wipe; fi
     section "Instalacao"
     setup_data_dir
-    restore_config
     install_bundles
     install_theme
     finish_keep
@@ -1394,8 +1337,6 @@ while (($#)); do
         --bundles)          shift; OPT_BUNDLES="${1:-}"; [[ -n "$OPT_BUNDLES" ]] || die "--bundles exige all, none ou uma lista de IDs" ;;
         --no-bundles)       OPT_BUNDLES=none ;;
         --enable-service)   OPT_ENABLE=1 ;;
-        --keep-config)      OPT_KEEP_CONFIG=1 ;;
-        --no-keep-config)   OPT_KEEP_CONFIG=0 ;;
         --logo)            OPT_LOGO=on ;;
         --no-logo)          OPT_LOGO=off ;;
         --menu-box)        OPT_MENU=on ;;
@@ -1408,8 +1349,6 @@ while (($#)); do
 done
 ((OPT_PURGE)) && [[ "$ACTION" != uninstall ]] && die "--purge so pode ser usado com --uninstall"
 ((FRESH)) && [[ "$ACTION" == uninstall ]] && die "--fresh e --uninstall sao incompativeis"
-[[ -n "$OPT_KEEP_CONFIG" ]] && ((!FRESH)) \
-    && die "--keep-config/--no-keep-config so se aplicam a --fresh (as demais instalacoes ja preservam a configuracao)"
 ((OPT_ENABLE)) && [[ "$OPT_SERVICE" == 0 ]] && die "--enable-service e --without-service sao incompativeis"
 
 case "$ACTION" in
