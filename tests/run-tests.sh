@@ -29,47 +29,38 @@ expect_rc() {
 section() { printf '\n\e[1m%s\e[0m\n' "$*"; }
 
 # --- Ferramentas de teste --------------------------------------------
-cat > "$T/mkpng.py" <<'EOF'
+# Gerador de PNG dos testes (um script, dois modos):
+#   mkpng ARQ [COR] [INTERLACE] [SEMENTE]   8x8 com padrao (cor 3 = paleta)
+#   mksolid ARQ COR(0|2|4|6) BITS(8|16) VALOR_ESQ VALOR_DIR [ALFA] [INTERLACE]
+#     200x120 solido: VALOR_ESQ nos 30% da esquerda (onde ficam o menu e
+#     o logo), VALOR_DIR no resto; ALFA (0-255) vale para os tipos com alfa
+cat > "$T/png.py" <<'EOF'
 import struct, sys, zlib
 def chunk(t, d):
     return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-def png(path, w=8, h=8, color=2, interlace=0, seed=0):
-    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
-    raw = b"".join(b"\0" + bytes([(seed * 37 + x * 13 + y) & 255 for x in range(w * bpp)]) for y in range(h))
-    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, color, 0, 0, interlace))
+def write(path, w, h, bits, color, inter, rows):
+    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, bits, color, 0, 0, inter))
     if color == 3:
         data += chunk(b"PLTE", bytes(range(256)) * 3)
-    data += chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    data += chunk(b"IDAT", zlib.compress(b"".join(b"\0" + r for r in rows))) + chunk(b"IEND", b"")
     open(path, "wb").write(data)
-args = sys.argv[1:]
-png(args[0], color=int(args[1]) if len(args) > 1 else 2,
-    interlace=int(args[2]) if len(args) > 2 else 0, seed=int(args[3]) if len(args) > 3 else 0)
+mode, path, a = sys.argv[1], sys.argv[2], [int(x) for x in sys.argv[3:]]
+arg = lambda i, d: a[i] if len(a) > i else d
+if mode == "pattern":
+    color, seed = arg(0, 2), arg(2, 0)
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
+    rows = [bytes([(seed * 37 + x * 13 + y) & 255 for x in range(8 * bpp)]) for y in range(8)]
+    write(path, 8, 8, 8, color, arg(1, 0), rows)
+else:
+    color, bits, left, right, alpha = a[0], a[1], a[2], a[3], arg(4, 255)
+    def px(v):
+        ch = {0: [v], 2: [v, v, v], 4: [v, alpha], 6: [v, v, v, alpha]}[color]
+        return b"".join(bytes([c]) if bits == 8 else struct.pack(">H", c * 257) for c in ch)
+    rows = [b"".join(px(left if x < 60 else right) for x in range(200))] * 120
+    write(path, 200, 120, bits, color, arg(5, 0), rows)
 EOF
-mkpng() { python3 -I "$T/mkpng.py" "$@"; }
-
-# PNG de cor solida para os testes de tom:
-#   mksolid ARQ COR(0|2|4|6) BITS(8|16) VALOR_ESQ VALOR_DIR [ALFA] [INTERLACE]
-# VALOR_ESQ preenche os 30% da esquerda (onde ficam o menu e o logo) e
-# VALOR_DIR o resto; ALFA (0-255) vale para os tipos com alfa.
-cat > "$T/mksolid.py" <<'EOF'
-import struct, sys, zlib
-def chunk(t, d):
-    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-path, color, bits, left, right = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-alpha = int(sys.argv[6]) if len(sys.argv) > 6 else 255
-inter = int(sys.argv[7]) if len(sys.argv) > 7 else 0
-w, h = 200, 120
-def px(v):
-    ch = {0: [v], 2: [v, v, v], 4: [v, alpha], 6: [v, v, v, alpha]}[color]
-    return b"".join(bytes([c]) if bits == 8 else struct.pack(">H", c * 257) for c in ch)
-rows = []
-for y in range(h):
-    rows.append(b"\0" + b"".join(px(left if x < w * 0.3 else right) for x in range(w)))
-data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, bits, color, 0, 0, inter))
-data += chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
-open(path, "wb").write(data)
-EOF
-mksolid() { python3 -I "$T/mksolid.py" "$@"; }
+mkpng() { python3 -I "$T/png.py" pattern "$@"; }
+mksolid() { python3 -I "$T/png.py" solid "$@"; }
 
 # Bundle de teste: mkbundle DIR ID VERSAO N [nome]
 mkbundle() {
@@ -108,7 +99,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.5.0' ]]"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.5.1' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -262,7 +253,7 @@ expect_rc 0 "--status sem helper/servico" "$MGR" --status
 section "Background Helper"
 expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
 expect_rc 0 "--install-helper" "$MGR" --install-helper
-check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.2.0 ]]"
+check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.2.1 ]]"
 expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
 printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/preferences.conf"
 prev=""; rep=0
@@ -283,6 +274,18 @@ printf 'MODE="balanced"\n' > "$DATA/config/preferences.conf"
 bl="$(dist)"
 check "balanced: angelic (1 imagem) recebe ~1/3 dos sorteios" bash -c "c=\$(awk '/angelic/{print \$1}' <<< '$bl'); (( c > 170 && c < 300 ))"
 check "balanced: big (10 imagens) recebe ~1/3 no total" bash -c "c=\$(awk '/big\\//{s+=\$1} END{print s}' <<< '$bl'); (( c > 170 && c < 300 ))"
+printf 'TONE="auto"\n' > "$DATA/config/preferences.conf"
+nm="$(dist)"
+check "MODE ausente = global (padrao do modelo): 15 imagens elegiveis" test "$(wc -l <<< "$nm")" = 15
+check "  manager: MODE ausente = global" bash -c "'$MGR' --list-bundles | grep -q 'Modo atual: global'"
+printf 'MODE="balanced"\n' > "$DATA/config/preferences.conf"
+echo "angelic/background1.png" > "$DATA/state/last-background"
+check "balanced: a ultima imagem nao se repete" bash -c "for i in \$(seq 40); do [[ \$('$HELPER' --dry-run) == angelic/background1.png ]] && exit 1; done; exit 0"
+rm -f "$DATA/state/last-background"
+mv "$DATA/config/paths.conf" "$T/paths.conf.bak"
+expect_rc 5 "sem paths.conf: helper recusa (sem descoberta automatica)" "$HELPER" --dry-run
+expect_rc 5 "  manager: idem" "$MGR" --randomize
+mv "$T/paths.conf.bak" "$DATA/config/paths.conf"
 
 section "Falhas preservam o wallpaper valido"
 printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\n' > "$DATA/config/preferences.conf"
@@ -335,6 +338,9 @@ check "sem daemon-reload quando nada muda" bash -c "! grep -q daemon-reload '$T/
 expect_rc 0 "--enable-service" "$MGR" --enable-service
 check "habilitado" test -e "$T/systemctl.enabled"
 expect_rc 4 "--uninstall helper bloqueado pelo servico" "$MGR" --yes --uninstall helper
+expect_rc 0 "--stop-service" "$MGR" --stop-service
+expect_rc 0 "--start-service" "$MGR" --start-service
+check "  systemctl stop/start chamados" bash -c "grep -qx 'stop grub-random-bg.service' '$T/systemctl.log' && grep -qx 'start grub-random-bg.service' '$T/systemctl.log'"
 expect_rc 0 "--disable-service" "$MGR" --disable-service
 expect_rc 0 "--update (nada a fazer)" "$MGR" --yes --update
 expect_rc 0 "--uninstall service" "$MGR" --yes --uninstall service
@@ -608,7 +614,7 @@ check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundl
 check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
 check "preferences.conf criado a partir do modelo comentado" bash -c "grep -q 'reload-confs' '$LD/config/preferences.conf' && grep -qx 'LOGO=\"on\"' '$LD/config/preferences.conf' && grep -qx 'MENU_BOX=\"on\"' '$LD/config/preferences.conf'"
 check "modelo das preferencias no payload" cmp -s "$PKG/config/preferences.conf" "$L/usr/share/kawaii-arch-manager/payload/preferences.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.5.0' ]]"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.5.1' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"

@@ -65,15 +65,7 @@ int png_check_file(const char *path, struct png_info *pi, char *err, size_t errs
         return -1;
     }
     unsigned char b[29];
-    size_t got = 0;
-    while (got < sizeof b) {
-        ssize_t r = read(fd, b + got, sizeof b - got);
-        if (r < 0 && errno == EINTR)
-            continue;
-        if (r <= 0)
-            break;
-        got += (size_t)r;
-    }
+    ssize_t got = read_full(fd, b, sizeof b);
     close(fd);
-    return png_check_buf(b, got, pi, err, errsz);
+    return png_check_buf(b, got > 0 ? (size_t)got : 0, pi, err, errsz);
 }

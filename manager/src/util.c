@@ -14,50 +14,31 @@
 #include <time.h>
 #include <unistd.h>
 
-static bool color_out(void) { return isatty(STDOUT_FILENO); }
-static bool color_err(void) { return isatty(STDERR_FILENO); }
-
-void msg(const char *fmt, ...)
+/* Prefixo (colorido se a saida for um terminal) + mensagem + '\n' */
+static void vout(FILE *f, const char *color, const char *tag, const char *fmt, va_list ap)
 {
-    va_list ap;
-    fputs(color_out() ? "\033[32m==>\033[0m " : "==> ", stdout);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
-    fputc('\n', stdout);
+    if (f == stderr)
+        fflush(stdout);
+    if (color && isatty(fileno(f)))
+        fprintf(f, "\033[%sm%s\033[0m ", color, tag);
+    else
+        fprintf(f, "%s ", tag);
+    vfprintf(f, fmt, ap);
+    fputc('\n', f);
 }
 
-void note(const char *fmt, ...)
-{
-    va_list ap;
-    fputs("    ", stdout);
-    va_start(ap, fmt);
-    vprintf(fmt, ap);
-    va_end(ap);
-    fputc('\n', stdout);
-}
+#define VOUT(f, color, tag)              \
+    do {                                 \
+        va_list ap;                      \
+        va_start(ap, fmt);               \
+        vout(f, color, tag, fmt, ap);    \
+        va_end(ap);                      \
+    } while (0)
 
-void warnmsg(const char *fmt, ...)
-{
-    va_list ap;
-    fflush(stdout);
-    fputs(color_err() ? "\033[33maviso:\033[0m " : "aviso: ", stderr);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-}
-
-void errmsg(const char *fmt, ...)
-{
-    va_list ap;
-    fflush(stdout);
-    fputs(color_err() ? "\033[31merro:\033[0m " : "erro: ", stderr);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-}
+void msg(const char *fmt, ...) { VOUT(stdout, "32", "==>"); }
+void note(const char *fmt, ...) { VOUT(stdout, NULL, "   "); }
+void warnmsg(const char *fmt, ...) { VOUT(stderr, "33", "aviso:"); }
+void errmsg(const char *fmt, ...) { VOUT(stderr, "31", "erro:"); }
 
 /* Elevacao explicita: nunca chama sudo sozinho, apenas orienta. */
 int require_root(const char *what)
@@ -83,9 +64,8 @@ int confirm(const char *question, bool def)
         return -1;
     }
     for (;;) {
-        printf("%s? %s %s ", color_out() ? "\033[36m" : "", question, hint);
-        if (color_out())
-            fputs("\033[0m", stdout);
+        bool tty = isatty(STDOUT_FILENO);
+        printf("%s? %s %s%s", tty ? "\033[36m" : "", question, hint, tty ? "\033[0m " : " ");
         fflush(stdout);
         if (!fgets(line, sizeof line, stdin))
             return -1;
@@ -123,6 +103,19 @@ int pathf(char *out, size_t sz, const char *fmt, ...)
         return -1;
     }
     return 0;
+}
+
+/* Conteudo curto de um arquivo, sem espacos nas pontas ("" se ausente) */
+const char *read_value(const char *path, char *out, size_t sz)
+{
+    char *b = read_file(path, 4096, NULL);
+    out[0] = '\0';
+    if (b) {
+        trim(b);
+        snprintf(out, sz, "%s", b);
+        free(b);
+    }
+    return out;
 }
 
 char *read_file(const char *path, size_t max, size_t *len)
@@ -200,7 +193,7 @@ static void dirname_of(const char *path, char *out, size_t sz)
         *s = '\0';
 }
 
-static int write_all(int fd, const void *data, size_t len)
+int write_all(int fd, const void *data, size_t len)
 {
     const char *p = data;
     while (len) {
@@ -214,6 +207,23 @@ static int write_all(int fd, const void *data, size_t len)
         len -= (size_t)w;
     }
     return 0;
+}
+
+/* Le ate n bytes (menos so no fim do arquivo); -1 em erro */
+ssize_t read_full(int fd, void *buf, size_t n)
+{
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, (char *)buf + got, n - got);
+        if (r < 0 && errno == EINTR)
+            continue;
+        if (r < 0)
+            return -1;
+        if (r == 0)
+            break;
+        got += (size_t)r;
+    }
+    return (ssize_t)got;
 }
 
 int write_file_atomic(const char *path, const char *data, size_t len, mode_t mode)
@@ -515,15 +525,16 @@ bool utf8_valid(const char *str, size_t n)
     return true;
 }
 
-/* Inteiro uniforme em [0, n) via getrandom(2) com rejeicao */
+/* Inteiro uniforme em [0, n) via getrandom(2) com rejeicao (repete se
+ * interrompido por sinal) */
 unsigned long long rand_below(unsigned long long n)
 {
     if (n <= 1)
         return 0;
     unsigned long long lim = ULLONG_MAX - (ULLONG_MAX % n), r;
     do {
-        if (getrandom(&r, sizeof r, 0) != (ssize_t)sizeof r)
-            r = ((unsigned long long)rand() << 32) ^ (unsigned long long)rand();
+        while (getrandom(&r, sizeof r, 0) != (ssize_t)sizeof r)
+            ;
     } while (r >= lim);
     return r % n;
 }

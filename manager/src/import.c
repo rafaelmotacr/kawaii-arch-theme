@@ -244,6 +244,43 @@ static int name_cmp(const void *a, const void *b)
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
 
+static void scan_skip(struct scan *s, const char *shown)
+{
+    s->skipped++;
+    if (!s->skipped_example[0])
+        snprintf(s->skipped_example, sizeof s->skipped_example, "%.255s", shown);
+}
+
+/* Imagem com cabecalho head: registra como utilizavel ou ignorada */
+static int scan_image(struct scan *s, const char *name, const unsigned char *head, ssize_t got,
+                      long long size, char *err, size_t errsz)
+{
+    char pe[128];
+    if (png_check_buf(head, (size_t)got, NULL, pe, sizeof pe) < 0) {
+        s->invalid_images++;
+        if (!s->invalid_example[0])
+            snprintf(s->invalid_example, sizeof s->invalid_example, "%.255s: %s", name, pe);
+        return 0;
+    }
+    if (s->nnames == s->cap) {
+        size_t cap = s->cap ? s->cap * 2 : 64;
+        char **nn = realloc(s->names, cap * sizeof *nn);
+        if (!nn) {
+            snprintf(err, errsz, "sem memoria");
+            return -1;
+        }
+        s->names = nn;
+        s->cap = cap;
+    }
+    if (!(s->names[s->nnames] = strdup(name))) {
+        snprintf(err, errsz, "sem memoria");
+        return -1;
+    }
+    s->nnames++;
+    s->image_bytes += size;
+    return 0;
+}
+
 static int scan_finish(struct scan *s, struct kawall_info *ki, bool check_top, char *err, size_t errsz);
 
 /* Passagem 1: valida tudo sem escrever no disco */
@@ -273,37 +310,15 @@ static int scan_archive(const char *path, struct scan *s, struct kawall_info *ki
                 goto out;
             }
             unsigned char head[29];
-            char pe[128];
             ssize_t got = read_n(a, head, sizeof head);
             if (got < 0) {
                 snprintf(err, errsz, "falha ao ler %s: %s", img, archive_error_string(a));
                 goto out;
             }
-            if (png_check_buf(head, (size_t)got, NULL, pe, sizeof pe) < 0) {
-                s->invalid_images++;
-                if (!s->invalid_example[0])
-                    snprintf(s->invalid_example, sizeof s->invalid_example, "%s: %s", img, pe);
-                continue;
-            }
-            if (s->nnames == s->cap) {
-                s->cap = s->cap ? s->cap * 2 : 64;
-                char **nn = realloc(s->names, s->cap * sizeof *nn);
-                if (!nn) {
-                    snprintf(err, errsz, "sem memoria");
-                    goto out;
-                }
-                s->names = nn;
-            }
-            if (!(s->names[s->nnames] = strdup(img))) {
-                snprintf(err, errsz, "sem memoria");
+            if (scan_image(s, img, head, got, archive_entry_size(e), err, errsz) < 0)
                 goto out;
-            }
-            s->nnames++;
-            s->image_bytes += archive_entry_size(e);
         } else if (k == K_SKIP && c == 0) {
-            s->skipped++;
-            if (!s->skipped_example[0])
-                snprintf(s->skipped_example, sizeof s->skipped_example, "%s", archive_entry_pathname(e));
+            scan_skip(s, archive_entry_pathname(e));
         }
     }
     if (r != ARCHIVE_EOF) {
@@ -365,58 +380,42 @@ int kawall_inspect(const char *path, struct kawall_info *ki, char *err, size_t e
     return r;
 }
 
-/* Grava o conteudo da entrada atual em dirfd/name (nome ja validado) */
+/* Grava o conteudo da entrada atual em dirfd/name (nome ja validado);
+ * head: bytes ja lidos do inicio da entrada */
 static int extract_to(struct archive *a, struct archive_entry *e, int dirfd, const char *name,
                       const void *head, size_t headlen, char *err, size_t errsz)
 {
-    long long declared = archive_entry_size(e), written = 0;
+    long long declared = archive_entry_size(e), written = (long long)headlen;
     int fd = openat(dirfd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) {
         snprintf(err, errsz, "falha ao criar %s: %s", name, strerror(errno));
         return -1;
     }
     char buf[1 << 16];
-    const char *src = head;
-    size_t len = headlen;
-    for (;;) {
-        if (len) {
-            written += (long long)len;
-            if (written > declared) {
-                snprintf(err, errsz, "%s excede o tamanho declarado", name);
-                close(fd);
-                return -1;
-            }
-            const char *p = src;
-            while (len) {
-                ssize_t w = write(fd, p, len);
-                if (w < 0 && errno == EINTR)
-                    continue;
-                if (w < 0) {
-                    snprintf(err, errsz, "falha ao gravar %s: %s", name, strerror(errno));
-                    close(fd);
-                    return -1;
-                }
-                p += w;
-                len -= (size_t)w;
-            }
+    la_ssize_t r = 0;
+    int rc = -1;
+    if (write_all(fd, head, headlen) < 0)
+        goto werr;
+    while ((r = archive_read_data(a, buf, sizeof buf)) > 0) {
+        if ((written += r) > declared) {
+            snprintf(err, errsz, "%s excede o tamanho declarado", name);
+            goto out;
         }
-        la_ssize_t r = archive_read_data(a, buf, sizeof buf);
-        if (r < 0) {
-            snprintf(err, errsz, "falha ao ler %s do pacote: %s", name, archive_error_string(a));
-            close(fd);
-            return -1;
-        }
-        if (r == 0)
-            break;
-        src = buf;
-        len = (size_t)r;
+        if (write_all(fd, buf, (size_t)r) < 0)
+            goto werr;
     }
-    close(fd);
-    if (written != declared) {
+    if (r < 0)
+        snprintf(err, errsz, "falha ao ler %s do pacote: %s", name, archive_error_string(a));
+    else if (written != declared)
         snprintf(err, errsz, "%s: tamanho divergente", name);
-        return -1;
-    }
-    return 0;
+    else
+        rc = 0;
+    goto out;
+werr:
+    snprintf(err, errsz, "falha ao gravar %s: %s", name, strerror(errno));
+out:
+    close(fd);
+    return rc;
 }
 
 /* Passagem 2: extracao controlada para tmpdir */
@@ -449,15 +448,14 @@ static int extract_archive(const char *path, const char *tmpdir, long *n_out, ch
                 goto out;
             }
             got_manifest = true;
-            if (extract_to(a, e, tfd, "manifest.conf", NULL, 0, err,
-                           errsz) < 0)
+            if (extract_to(a, e, tfd, "manifest.conf", NULL, 0, err, errsz) < 0)
                 goto out;
         } else if (k == K_IMAGE) {
             unsigned char head[29];
             char pe[128];
             ssize_t got = read_n(a, head, sizeof head);
             if (got < 0) {
-                snprintf(err, errsz, "falha ao ler %s", img);
+                snprintf(err, errsz, "falha ao ler %s: %s", img, archive_error_string(a));
                 goto out;
             }
             if (png_check_buf(head, (size_t)got, NULL, pe, sizeof pe) < 0)
@@ -539,21 +537,6 @@ static int open_reg(int dfd, const char *name, const char *shown, long long *siz
     return fd;
 }
 
-static ssize_t read_full(int fd, void *buf, size_t n)
-{
-    size_t got = 0;
-    while (got < n) {
-        ssize_t r = read(fd, (char *)buf + got, n - got);
-        if (r < 0 && errno == EINTR)
-            continue;
-        if (r < 0)
-            return -1;
-        if (r == 0)
-            break;
-        got += (size_t)r;
-    }
-    return (ssize_t)got;
-}
 
 static bool has_manifest(const char *dir)
 {
@@ -669,9 +652,7 @@ static int scan_dir(const char *dir, struct scan *s, struct kawall_info *ki, cha
         if (stat_child(dirfd(bd), de->d_name, shown, &st, err, errsz) < 0)
             goto out;
         if (S_ISDIR(st.st_mode) || !image_name_valid(de->d_name)) {
-            s->skipped++;
-            if (!s->skipped_example[0])
-                snprintf(s->skipped_example, sizeof s->skipped_example, "%s", shown);
+            scan_skip(s, shown);
             continue;
         }
         if (++s->images > LIMIT_IMAGES) {
@@ -686,7 +667,6 @@ static int scan_dir(const char *dir, struct scan *s, struct kawall_info *ki, cha
             goto out;
         }
         unsigned char head[29];
-        char pe[128];
         ssize_t got = read_full(fd, head, sizeof head);
         close(fd);
         fd = -1;
@@ -694,27 +674,8 @@ static int scan_dir(const char *dir, struct scan *s, struct kawall_info *ki, cha
             snprintf(err, errsz, "falha ao ler %s", shown);
             goto out;
         }
-        if (png_check_buf(head, (size_t)got, NULL, pe, sizeof pe) < 0) {
-            s->invalid_images++;
-            if (!s->invalid_example[0])
-                snprintf(s->invalid_example, sizeof s->invalid_example, "%.255s: %s", de->d_name, pe);
-            continue;
-        }
-        if (s->nnames == s->cap) {
-            s->cap = s->cap ? s->cap * 2 : 64;
-            char **nn = realloc(s->names, s->cap * sizeof *nn);
-            if (!nn) {
-                snprintf(err, errsz, "sem memoria");
-                goto out;
-            }
-            s->names = nn;
-        }
-        if (!(s->names[s->nnames] = strdup(de->d_name))) {
-            snprintf(err, errsz, "sem memoria");
+        if (scan_image(s, de->d_name, head, got, sz, err, errsz) < 0)
             goto out;
-        }
-        s->nnames++;
-        s->image_bytes += sz;
     }
 
     /* Demais entradas da pasta: ignoradas (nunca abertas) */
@@ -722,11 +683,8 @@ static int scan_dir(const char *dir, struct scan *s, struct kawall_info *ki, cha
     if (tfd >= 0 && (top = fdopendir(tfd))) {
         while ((de = readdir(top)))
             if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..") && strcmp(de->d_name, "manifest.conf") &&
-                strcmp(de->d_name, "backgrounds")) {
-                s->skipped++;
-                if (!s->skipped_example[0])
-                    snprintf(s->skipped_example, sizeof s->skipped_example, "%.255s", de->d_name);
-            }
+                strcmp(de->d_name, "backgrounds"))
+                scan_skip(s, de->d_name);
     } else if (tfd >= 0) {
         close(tfd);
     }
@@ -742,7 +700,7 @@ out:
     return rc;
 }
 
-/* Copia dfd/name para dstdir/name (O_EXCL, 0644); head ja lido do inicio */
+/* Copia srcfd para dstdir/name (O_EXCL, 0644); head ja lido do inicio */
 static int copy_to(int srcfd, const void *head, size_t headlen, int dstdir, const char *name, char *err,
                    size_t errsz)
 {
@@ -752,48 +710,32 @@ static int copy_to(int srcfd, const void *head, size_t headlen, int dstdir, cons
         return -1;
     }
     char buf[1 << 16];
-    const char *src = head;
-    size_t len = headlen;
-    long long total = 0;
-    for (;;) {
-        total += (long long)len;
-        if (total > LIMIT_FILE_BYTES) {
+    long long total = (long long)headlen;
+    ssize_t r;
+    if (write_all(out, head, headlen) < 0)
+        goto werr;
+    while ((r = read_full(srcfd, buf, sizeof buf)) > 0) {
+        if ((total += r) > LIMIT_FILE_BYTES) {
             snprintf(err, errsz, "%s cresceu alem do limite durante a copia", name);
             close(out);
             return -1;
         }
-        while (len) {
-            ssize_t w = write(out, src, len);
-            if (w < 0 && errno == EINTR)
-                continue;
-            if (w < 0) {
-                snprintf(err, errsz, "falha ao gravar %s: %s", name, strerror(errno));
-                close(out);
-                return -1;
-            }
-            src += w;
-            len -= (size_t)w;
-        }
-        ssize_t r = read(srcfd, buf, sizeof buf);
-        if (r < 0 && errno == EINTR) {
-            len = 0;
-            continue;
-        }
-        if (r < 0) {
-            snprintf(err, errsz, "falha ao ler %s: %s", name, strerror(errno));
-            close(out);
-            return -1;
-        }
-        if (r == 0)
-            break;
-        src = buf;
-        len = (size_t)r;
+        if (write_all(out, buf, (size_t)r) < 0)
+            goto werr;
     }
-    if (close(out) < 0) {
-        snprintf(err, errsz, "falha ao gravar %s: %s", name, strerror(errno));
+    if (r < 0) {
+        snprintf(err, errsz, "falha ao ler %s: %s", name, strerror(errno));
+        close(out);
         return -1;
     }
-    return 0;
+    if (close(out) == 0)
+        return 0;
+    out = -1;
+werr:
+    snprintf(err, errsz, "falha ao gravar %s: %s", name, strerror(errno));
+    if (out >= 0)
+        close(out);
+    return -1;
 }
 
 /* Passagem 2 para pasta: copia manifesto e imagens validas para tmpdir */

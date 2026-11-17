@@ -10,7 +10,6 @@
  *   TONE               o tom e reaplicado no fim (helper --retone) */
 #include "kam.h"
 
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -18,15 +17,8 @@ static void read_tone(char *out, size_t sz)
 {
     char p[PATH_MAX];
     out[0] = '\0';
-    if (!P.theme_dir[0])
-        return;
-    pathf(p, sizeof p, "%s/icons/.tone", P.theme_dir);
-    char *t = read_file(p, 64, NULL);
-    if (t) {
-        trim(t);
-        snprintf(out, sz, "%s", t);
-        free(t);
-    }
+    if (P.theme_dir[0] && pathf(p, sizeof p, "%s/icons/.tone", P.theme_dir) == 0)
+        read_value(p, out, sz);
 }
 
 int cmd_reload_confs(void)
@@ -78,13 +70,8 @@ int cmd_reload_confs(void)
     total += changed;
 
     /* 2. Wallpaper: so se o ativo nao corresponde a configuracao */
-    char last[ID_MAX + 2 + IMG_NAME_MAX] = "";
-    char *lb = read_file(P.last_bg, 1024, NULL);
-    if (lb) {
-        trim(lb);
-        snprintf(last, sizeof last, "%s", lb);
-        free(lb);
-    }
+    char last[ID_MAX + 2 + IMG_NAME_MAX];
+    read_value(P.last_bg, last, sizeof last);
     size_t bl = strlen(c.bundle);
     bool need = (!strcmp(c.mode, "fixed") && strcmp(last, c.background)) ||
                 (!strcmp(c.mode, "set") && (strncmp(last, c.bundle, bl) || last[bl] != '/'));

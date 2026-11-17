@@ -45,7 +45,7 @@ int theme_mount_check(char *err, size_t errsz)
 {
     char tt[PATH_MAX], mp[PATH_MAX];
     if (!P.theme_dir[0]) {
-        snprintf(err, errsz, "diretorio do tema desconhecido (%s ausente e tema nao encontrado em /boot)", P.paths_conf);
+        snprintf(err, errsz, "diretorio do tema desconhecido: THEME_DIR ausente ou invalido em %s (rode o install.sh)", P.paths_conf);
         return KAM_EPRIV;
     }
     pathf(tt, sizeof tt, "%s/theme.txt", P.theme_dir);
@@ -280,13 +280,8 @@ static int apply_internal(void)
     int rc = prefs_load(&c, &have);
     if (rc)
         return rc;
-    char *lb = read_file(P.last_bg, 1024, NULL);
-    if (lb) {
-        trim(lb);
-        if (strchr(lb, '/'))
-            snprintf(last, sizeof last, "%s", lb);
-        free(lb);
-    }
+    if (!strchr(read_value(P.last_bg, last, sizeof last), '/'))
+        last[0] = '\0';
     if (bundles_scan(&v, &n) < 0) {
         errmsg("nao foi possivel ler %s: %s", P.bundles_dir, strerror(errno));
         return KAM_EFAIL;

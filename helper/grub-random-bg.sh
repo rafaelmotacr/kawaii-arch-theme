@@ -49,7 +49,7 @@ export LC_ALL=C
 
 # Versao do helper (SemVer). Lida como texto pelo instalador e pelo
 # manager (sem executar o script): mantenha o formato VERSION="x.y.z".
-VERSION="2.2.0"
+VERSION="2.2.1"
 
 readonly E_OK=0 E_FAIL=1 E_USAGE=2 E_CONFIG=3 E_BUSY=4 E_PERM=5
 
@@ -63,7 +63,6 @@ PREFS="$CONF_DIR/preferences.conf"
 PATHS_CONF="$CONF_DIR/paths.conf"
 LAST_FILE="$STATE_DIR/last-background"
 LOCK_FILE="$STATE_DIR/apply.lock"
-THEME_NAME="kawaii-arch-theme"
 ACTIVE_NAME="background.png"
 FALLBACK_NAME="fallback.png"
 
@@ -80,16 +79,12 @@ RETONE=0
 JOURNAL=0
 [[ -n "${INVOCATION_ID:-}" || -n "${JOURNAL_STREAM:-}" ]] && JOURNAL=1
 
-log_info() {
-    ((QUIET)) && return 0
-    if ((JOURNAL)); then echo "<6>$*"; else echo "grub-random-bg: $*"; fi
+log() {   # log PRIORIDADE PREFIXO MENSAGEM
+    if ((JOURNAL)); then echo "<$1>$2$3"; else echo "grub-random-bg: $2$3"; fi
 }
-log_warn() {
-    if ((JOURNAL)); then echo "<4>aviso: $*" >&2; else echo "grub-random-bg: aviso: $*" >&2; fi
-}
-log_err() {
-    if ((JOURNAL)); then echo "<3>erro: $*" >&2; else echo "grub-random-bg: erro: $*" >&2; fi
-}
+log_info() { ((QUIET)) || log 6 "" "$*"; }
+log_warn() { log 4 "aviso: " "$*" >&2; }
+log_err()  { log 3 "erro: " "$*" >&2; }
 
 usage() { sed -n '2,/^# =====/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 
@@ -141,19 +136,13 @@ png_ok() {
 }
 
 # --- Aleatoriedade uniforme -------------------------------------------
-# rand_below N -> RAND (0..N-1). Usa SRANDOM (bash >= 5.1, 32 bits) com
-# rejeicao para evitar vies de modulo; senao recorre ao shuf.
+# rand_below N -> RAND (0..N-1). SRANDOM (32 bits) com rejeicao para
+# evitar vies de modulo.
 RAND=0
 rand_below() {
-    local n="$1" r lim
-    if ((n <= 1)); then RAND=0; return; fi
-    if [[ -n "${SRANDOM:-}" ]]; then
-        lim=$((4294967296 - 4294967296 % n))
-        while r=$SRANDOM; ((r >= lim)); do :; done
-        RAND=$((r % n))
-    else
-        RAND="$(shuf -i "0-$((n - 1))" -n 1)"
-    fi
+    local n="$1" r lim=$((4294967296 - 4294967296 % $1))
+    while r=$SRANDOM; ((r >= lim)); do :; done
+    RAND=$((r % n))
 }
 
 # --- Caminho do tema --------------------------------------------------
@@ -161,19 +150,12 @@ THEME_RAW=""        # caminho real (sem KAWAII_ROOT)
 THEME_DIR=""        # caminho efetivo
 EXPECTED_MOUNT=""
 
+# O caminho vem do paths.conf, gerado pelo install.sh.
 resolve_theme_dir() {
-    if conf_get "$PATHS_CONF" THEME_DIR && [[ -n "$CONF_VALUE" ]]; then
-        THEME_RAW="$CONF_VALUE"
-    else
-        local cand
-        for cand in /boot/grub/themes/$THEME_NAME /boot/grub2/themes/$THEME_NAME; do
-            if [[ -f "$ROOT$cand/theme.txt" ]]; then THEME_RAW="$cand"; break; fi
-        done
-        if [[ -z "$THEME_RAW" ]]; then
-            log_err "diretorio do tema desconhecido: $PATHS_CONF ausente e tema nao encontrado em /boot/grub{,2}/themes (particao de boot montada?)"
-            return 1
-        fi
-        log_warn "$PATHS_CONF ausente; usando $THEME_RAW"
+    conf_get "$PATHS_CONF" THEME_DIR; THEME_RAW="$CONF_VALUE"
+    if [[ -z "$THEME_RAW" ]]; then
+        log_err "diretorio do tema desconhecido: THEME_DIR ausente em $PATHS_CONF (rode o install.sh)"
+        return 1
     fi
     if [[ "$THEME_RAW" != /* || "$THEME_RAW" == *"/../"* || "$THEME_RAW" == *"/.." ]]; then
         log_err "THEME_DIR invalido em $PATHS_CONF: \"$THEME_RAW\""
@@ -253,39 +235,43 @@ IMAGES=()
 bundle_images() {
     IMAGES=()
     local f name
-    shopt -s nullglob
     for f in "$BUNDLES_DIR/$1/backgrounds/"*.png; do
         name="${f##*/}"
         [[ "$name" =~ $IMG_RE && -f "$f" && ! -L "$f" ]] && IMAGES+=("$name")
     done
-    shopt -u nullglob
 }
 
 # --- Selecao ----------------------------------------------------------
 LAST=""
 CHOSEN=""        # "id/nome.png"
 
-# pick_from_list "id/img" ... -> CHOSEN; evita LAST se houver alternativa,
-# descarta imagens invalidas e sorteia novamente (uniforme entre validas)
+img_path() { echo "$BUNDLES_DIR/${1%%/*}/backgrounds/${1#*/}"; }
+
+# pick_from_list "id/img" ... -> CHOSEN: sorteio uniforme entre os itens
+# diferentes de LAST; imagens invalidas sao descartadas e o sorteio repete
 pick_from_list() {
-    local -a cand=() rest=()
-    local item had_last=0
-    for item in "$@"; do
-        if [[ -n "$LAST" && "$item" == "$LAST" ]]; then had_last=1; else cand+=("$item"); fi
-    done
-    while ((${#cand[@]} > 0)); do
+    local -a cand=()
+    local item
+    for item in "$@"; do [[ "$item" != "$LAST" ]] && cand+=("$item"); done
+    while ((${#cand[@]})); do
         rand_below "${#cand[@]}"
         item="${cand[RAND]}"
-        if png_ok "$BUNDLES_DIR/${item%%/*}/backgrounds/${item#*/}"; then
-            CHOSEN="$item"; return 0
-        fi
+        if png_ok "$(img_path "$item")"; then CHOSEN="$item"; return 0; fi
         log_warn "imagem invalida ou ilegivel ignorada: $item"
-        rest=("${cand[@]:0:RAND}" "${cand[@]:RAND+1}")
-        cand=("${rest[@]}")
+        cand=("${cand[@]:0:RAND}" "${cand[@]:RAND+1}")
     done
-    if ((had_last)) && png_ok "$BUNDLES_DIR/${LAST%%/*}/backgrounds/${LAST#*/}"; then
-        CHOSEN="$LAST"; return 0
-    fi
+    return 1
+}
+
+# pick_last "id/img" ... -> CHOSEN=LAST, se ele esta na lista e e valido
+# (ultimo recurso: repetir o wallpaper e melhor que o fallback)
+pick_last() {
+    local item
+    for item in "$@"; do
+        if [[ -n "$LAST" && "$item" == "$LAST" ]] && png_ok "$(img_path "$LAST")"; then
+            CHOSEN="$LAST"; return 0
+        fi
+    done
     return 1
 }
 
@@ -309,7 +295,7 @@ select_set() {
     bundle_images "$id"
     for img in "${IMAGES[@]}"; do all+=("$id/$img"); done
     ((${#all[@]})) || { log_err "bundle '$id' nao possui imagens"; return 1; }
-    pick_from_list "${all[@]}" || { log_err "nenhuma imagem valida no bundle '$id'"; return 1; }
+    pick_from_list "${all[@]}" || pick_last "${all[@]}" || { log_err "nenhuma imagem valida no bundle '$id'"; return 1; }
 }
 
 select_global() {
@@ -320,45 +306,26 @@ select_global() {
         for img in "${IMAGES[@]}"; do all+=("$id/$img"); done
     done
     ((${#all[@]})) || { log_err "modo 'global': nenhuma imagem em nenhum bundle"; return 1; }
-    pick_from_list "${all[@]}" || { log_err "modo 'global': nenhuma imagem valida"; return 1; }
+    pick_from_list "${all[@]}" || pick_last "${all[@]}" || { log_err "modo 'global': nenhuma imagem valida"; return 1; }
 }
 
-# balanced: bundle uniforme, depois imagem uniforme dentro dele.
+# balanced: bundle uniforme, depois imagem uniforme dentro dele. Um
+# bundle sem imagem valida (alem de LAST) sai do sorteio.
 select_balanced() {
-    local -A pool=()
-    local id img item last_ok=0
-    local -a ids=() imgs=() keep=()
+    local id img
+    local -a ids=() imgs=() all=()
     list_bundles
-    for id in "${BUNDLES[@]}"; do
+    ids=("${BUNDLES[@]}")
+    while ((${#ids[@]})); do
+        rand_below "${#ids[@]}"; id="${ids[RAND]}"
+        ids=("${ids[@]:0:RAND}" "${ids[@]:RAND+1}")
         bundle_images "$id"
         imgs=()
-        for img in "${IMAGES[@]}"; do
-            if [[ "$id/$img" == "$LAST" ]]; then last_ok=1; else imgs+=("$img"); fi
-        done
-        if ((${#imgs[@]})); then pool[$id]="${imgs[*]}"; ids+=("$id"); fi
+        for img in "${IMAGES[@]}"; do imgs+=("$id/$img"); done
+        all+=("${imgs[@]}")
+        pick_from_list "${imgs[@]}" && return 0
     done
-    while ((${#ids[@]} > 0)); do
-        rand_below "${#ids[@]}"; id="${ids[RAND]}"
-        read -r -a imgs <<< "${pool[$id]}"
-        rand_below "${#imgs[@]}"; img="${imgs[RAND]}"
-        if png_ok "$BUNDLES_DIR/$id/backgrounds/$img"; then
-            CHOSEN="$id/$img"; return 0
-        fi
-        log_warn "imagem invalida ou ilegivel ignorada: $id/$img"
-        keep=()
-        for item in "${imgs[@]}"; do [[ "$item" != "$img" ]] && keep+=("$item"); done
-        if ((${#keep[@]})); then
-            pool[$id]="${keep[*]}"
-        else
-            unset 'pool[$id]'
-            keep=()
-            for item in "${ids[@]}"; do [[ "$item" != "$id" ]] && keep+=("$item"); done
-            ids=("${keep[@]}")
-        fi
-    done
-    if ((last_ok)) && png_ok "$BUNDLES_DIR/${LAST%%/*}/backgrounds/${LAST#*/}"; then
-        CHOSEN="$LAST"; return 0
-    fi
+    pick_last "${all[@]}" && return 0
     log_err "modo 'balanced': nenhum bundle com imagens validas"
     return 1
 }
@@ -369,7 +336,7 @@ select_image() {
         log_err "configuracao ausente ou ilegivel: $PREFS"
         return 1
     fi
-    conf_get "$PREFS" MODE; mode="${CONF_VALUE:-set}"
+    conf_get "$PREFS" MODE; mode="${CONF_VALUE:-global}"
     if [[ -r "$LAST_FILE" ]]; then
         IFS= read -r LAST < "$LAST_FILE" || true
         [[ "$LAST" == */* ]] || LAST=""
@@ -448,14 +415,9 @@ DISTRO_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
 # measure_tone ARQUIVO -> TONE (dark se o manager nao estiver disponivel)
 TONE="dark"
 measure_tone() {
-    local mgr="" out
+    local mgr="$ROOT/usr/bin/kawaii-arch-manager" out
     TONE="dark"
-    if [[ -x "$ROOT/usr/bin/kawaii-arch-manager" ]]; then
-        mgr="$ROOT/usr/bin/kawaii-arch-manager"
-    elif [[ -z "$ROOT" ]]; then
-        mgr="$(command -v kawaii-arch-manager 2>/dev/null)" || mgr=""
-    fi
-    if [[ -z "$mgr" ]]; then
+    if [[ ! -x "$mgr" ]]; then
         log_info "kawaii-arch-manager ausente; tom padrao (dark)"
         return 0
     fi
@@ -498,16 +460,14 @@ sync_icons() {
     [[ "$cur" == "$TONE" ]] && return 0
     mkdir -p -- "$dst" || return 1
     rm -f -- "$dst/.tone" || return 1
-    shopt -s nullglob
     for f in "$set"/*.png; do
         name="${f##*/}"
         [[ -f "$f" && ! -L "$f" ]] || continue
         cmp -s -- "$f" "$dst/$name" && continue
         cp --no-preserve=all -- "$f" "$dst/.$name.tmp" && mv -f -- "$dst/.$name.tmp" "$dst/$name" \
-            || { rm -f -- "$dst/.$name.tmp"; shopt -u nullglob; return 1; }
+            || { rm -f -- "$dst/.$name.tmp"; return 1; }
         changed=1
     done
-    shopt -u nullglob
     ((changed)) && sync -f "$dst" 2>/dev/null
     printf '%s\n' "$TONE" > "$dst/.tone.tmp" && mv -f -- "$dst/.tone.tmp" "$dst/.tone" \
         || { rm -f -- "$dst/.tone.tmp"; return 1; }
@@ -584,11 +544,7 @@ main() {
         log_err "sem permissao para $LOCK_FILE (execute como root)"
         return $E_PERM
     fi
-    if command -v flock >/dev/null; then
-        flock -w 30 9 || { log_err "outra execucao do helper esta em andamento"; return $E_BUSY; }
-    else
-        log_warn "flock indisponivel; execucoes concorrentes nao sao bloqueadas"
-    fi
+    flock -w 30 9 || { log_err "outra execucao do helper esta em andamento"; return $E_BUSY; }
 
     check_mount || return $E_PERM
     if [[ ! -w "$THEME_DIR" ]]; then
@@ -609,8 +565,7 @@ main() {
         return $E_CONFIG
     fi
 
-    local src="$BUNDLES_DIR/${CHOSEN%%/*}/backgrounds/${CHOSEN#*/}"
-    if ! apply_file "$src"; then
+    if ! apply_file "$(img_path "$CHOSEN")"; then
         apply_fallback >/dev/null 2>&1 || true
         return $E_FAIL
     fi

@@ -166,10 +166,10 @@ int main(int argc, char **argv)
     case C_UPDATE: return cmd_update();
     case C_INST_HELPER: return cmd_install_helper();
     case C_INST_SERVICE: return cmd_install_service();
-    case C_ENABLE: return cmd_enable_service();
-    case C_DISABLE: return cmd_disable_service();
-    case C_START: return cmd_start_service();
-    case C_STOP: return cmd_stop_service();
+    case C_ENABLE: return cmd_service("enable");
+    case C_DISABLE: return cmd_service("disable");
+    case C_START: return cmd_service("start");
+    case C_STOP: return cmd_service("stop");
     case C_UNINSTALL: return cmd_uninstall(arg);
     case C_LOGO: return cmd_set_logo(arg);
     case C_MENU_BOX: return cmd_set_menu_box(arg);

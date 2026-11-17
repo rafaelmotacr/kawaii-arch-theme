@@ -31,8 +31,8 @@ com imagens que você tenha direito de usar (ver
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
 | Tema GRUB | 3.1.1 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.5.0 | `/usr/bin/kawaii-arch-manager` | não |
-| Background Helper (bash) | 2.2.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
+| Kawaii Arch Manager (C, binário nativo) | 1.5.1 | `/usr/bin/kawaii-arch-manager` | não |
+| Background Helper (bash) | 2.2.1 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
 

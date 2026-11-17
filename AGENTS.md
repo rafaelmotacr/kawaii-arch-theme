@@ -230,6 +230,30 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
       blocos repetidos de manager e helper; `install_service` grava a
       unidade com `write_atomic` (sem `systemd-analyze verify`).
 
+11. **Varredura do helper, do manager e dos testes** (manager 1.5.1,
+    helper 2.2.1). Mesma limpeza do item 10, no resto da base:
+    - **correção:** sem `MODE` no `preferences.conf`, o helper e o manager
+      usavam `set`; agora usam `global`, o padrão do modelo;
+    - **sem descoberta do tema:** o caminho vem só do `paths.conf` (gerado
+      pelo instalador). Sem ele, o helper e o manager param com erro (código
+      5), e o `--status` não mostra mais a "Origem do caminho";
+    - helper sem os fallbacks de `shuf` (só `SRANDOM`), de `flock` ausente,
+      de `command -v kawaii-arch-manager` e sem `shopt nullglob`;
+      `select_balanced` reaproveita `pick_from_list` e o novo `pick_last`
+      (repetir o último wallpaper é o último recurso); funções de log
+      unificadas em `log`;
+    - manager: preferências numa tabela (`PREFS[]`: chave, campo e padrão)
+      usada por `prefs_load`, `prefs_save` e `prefs_warn_unknown`;
+      `vout` atende `msg`, `note`, `warnmsg` e `errmsg`; `cmd_service`
+      substitui os quatro comandos do serviço; `read_value` (ler e aparar
+      um arquivo curto) e `payload_theme_version` tiram leituras repetidas;
+      `import.c` usa `scan_image`/`scan_skip` nas duas origens e
+      `write_all`/`read_full` (agora em `util.c`) na cópia; `rand_below`
+      não recorre mais a `rand()`;
+    - testes: um único gerador de PNG (`png.py`, modos `pattern` e `solid`)
+      e testes para `MODE` ausente, `paths.conf` ausente, `balanced` sem
+      repetição e `--start-service`/`--stop-service`.
+
 ## 4. Convenções
 
 - **Idioma:** documentação e mensagens em português. O README usa acentos;
@@ -279,7 +303,7 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 3.1.1, manager 1.5.0, helper 2.2.0, unidade rev 2.
+Versões atuais: tema 3.1.1, manager 1.5.1, helper 2.2.1, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 

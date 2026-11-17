@@ -7,6 +7,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -66,7 +67,7 @@ const char *kv_get(const struct kv_list *l, const char *key)
     return NULL;
 }
 
-int kv_set(struct kv_list *l, const char *key, const char *val)
+static int kv_set(struct kv_list *l, const char *key, const char *val)
 {
     if (!conf_value_safe(val) || !key_ok(key, strlen(key))) {
         errno = EINVAL;
@@ -225,34 +226,15 @@ int paths_init(void)
     /* Em sandbox (KAWAII_ROOT) o systemd real nunca e tocado */
     snprintf(P.systemctl, sizeof P.systemctl, "%s", sc && *sc ? sc : P.root[0] ? "" : "systemctl");
 
-    /* Diretorio do tema: paths.conf (explicito) ou descoberta */
-    int e;
-    struct kv_list *l = kv_load(P.paths_conf, &e);
-    const char *t = l ? kv_get(l, "THEME_DIR") : NULL;
-    if (t && *t) {
-        if (!theme_raw_ok(t)) {
-            warnmsg("THEME_DIR invalido em %s: \"%s\"", P.paths_conf, t);
-        } else {
-            snprintf(P.theme_raw, sizeof P.theme_raw, "%s", t);
-            P.theme_from_conf = true;
-        }
-        const char *m = kv_get(l, "EXPECTED_MOUNT");
-        if (m)
-            snprintf(P.expected_mount, sizeof P.expected_mount, "%s", m);
-    }
+    /* Diretorio do tema: somente paths.conf (gerado pelo install.sh) */
+    struct kv_list *l = kv_load(P.paths_conf, NULL);
+    const char *t = kv_get(l, "THEME_DIR"), *m = kv_get(l, "EXPECTED_MOUNT");
+    if (t && *t && !theme_raw_ok(t))
+        warnmsg("THEME_DIR invalido em %s: \"%s\"", P.paths_conf, t);
+    else if (t && *t && pathf(P.theme_dir, sizeof P.theme_dir, "%s%s", P.root, t) == 0)
+        snprintf(P.theme_raw, sizeof P.theme_raw, "%s", t);
+    snprintf(P.expected_mount, sizeof P.expected_mount, "%s", m ? m : "");
     kv_free(l);
-    if (!P.theme_raw[0]) {
-        const char *cands[] = {"/boot/grub/themes/" THEME_NAME, "/boot/grub2/themes/" THEME_NAME};
-        for (size_t i = 0; i < 2; i++) {
-            char tt[PATH_MAX];
-            if (pathf(tt, sizeof tt, "%s%s/theme.txt", P.root, cands[i]) == 0 && is_regular(tt)) {
-                snprintf(P.theme_raw, sizeof P.theme_raw, "%s", cands[i]);
-                break;
-            }
-        }
-    }
-    if (P.theme_raw[0] && pathf(P.theme_dir, sizeof P.theme_dir, "%s%s", P.root, P.theme_raw) < 0)
-        P.theme_dir[0] = '\0';
 
     /* PATH previsivel ao executar como root */
     if (geteuid() == 0)
@@ -268,44 +250,42 @@ bool mode_valid(const char *m)
 bool onoff_valid(const char *v) { return !strcmp(v, "on") || !strcmp(v, "off"); }
 bool tone_valid(const char *v) { return !strcmp(v, "auto") || !strcmp(v, "dark") || !strcmp(v, "light"); }
 
-static const char *const PREF_KEYS[] = {"MODE", "SELECTED_BUNDLE", "SELECTED_BACKGROUND", "LOGO", "MENU_BOX", "TONE", "ON_FRESH_INSTALL"};
-#define NPREF_KEYS (sizeof PREF_KEYS / sizeof PREF_KEYS[0])
+/* Chaves das preferencias: campo da struct e padrao (o mesmo do modelo
+ * config/preferences.conf). Chave ausente ou vazia = padrao. */
+static const struct {
+    const char *key;
+    size_t off, sz;
+    const char *def;
+} PREFS[] = {
+#define F(k, f, d) {k, offsetof(struct prefs, f), sizeof(((struct prefs *)0)->f), d}
+    F("MODE", mode, "global"),
+    F("SELECTED_BUNDLE", bundle, ""),
+    F("SELECTED_BACKGROUND", background, ""),
+    F("LOGO", logo, "on"),
+    F("MENU_BOX", menu_box, "on"),
+    F("TONE", tone, "auto"),
+    F("ON_FRESH_INSTALL", on_fresh, "backup"),
+#undef F
+};
+#define NPREFS (sizeof PREFS / sizeof PREFS[0])
+#define PREF_VAL(c, i) ((const char *)(c) + PREFS[i].off)
 
-/* Chave ausente = padrao (o mesmo do modelo config/preferences.conf) */
 int prefs_load(struct prefs *c, bool *exists_out)
 {
-    memset(c, 0, sizeof *c);
-    snprintf(c->mode, sizeof c->mode, "set");
-    snprintf(c->logo, sizeof c->logo, "on");
-    snprintf(c->menu_box, sizeof c->menu_box, "on");
-    snprintf(c->tone, sizeof c->tone, "auto");
-    snprintf(c->on_fresh, sizeof c->on_fresh, "backup");
-    int e;
+    int e = 0;
     struct kv_list *l = kv_load(P.prefs_conf, &e);
+    memset(c, 0, sizeof *c);
+    for (size_t i = 0; i < NPREFS; i++) {
+        const char *v = kv_get(l, PREFS[i].key);
+        snprintf((char *)c + PREFS[i].off, PREFS[i].sz, "%s", v && *v ? v : PREFS[i].def);
+    }
+    kv_free(l);
     if (exists_out)
         *exists_out = l != NULL;
-    if (!l) {
-        if (e == ENOENT)
-            return KAM_OK;
+    if (!l && e != ENOENT) {
         errmsg("nao foi possivel ler %s (%s)", P.prefs_conf, e == EINVAL ? "formato invalido" : strerror(e));
         return KAM_EBUNDLE;
     }
-    const char *v;
-    if ((v = kv_get(l, "MODE")) && *v)
-        snprintf(c->mode, sizeof c->mode, "%s", v);
-    if ((v = kv_get(l, "SELECTED_BUNDLE")))
-        snprintf(c->bundle, sizeof c->bundle, "%s", v);
-    if ((v = kv_get(l, "SELECTED_BACKGROUND")))
-        snprintf(c->background, sizeof c->background, "%s", v);
-    if ((v = kv_get(l, "LOGO")) && *v)
-        snprintf(c->logo, sizeof c->logo, "%s", v);
-    if ((v = kv_get(l, "MENU_BOX")) && *v)
-        snprintf(c->menu_box, sizeof c->menu_box, "%s", v);
-    if ((v = kv_get(l, "TONE")) && *v)
-        snprintf(c->tone, sizeof c->tone, "%s", v);
-    if ((v = kv_get(l, "ON_FRESH_INSTALL")) && *v)
-        snprintf(c->on_fresh, sizeof c->on_fresh, "%s", v);
-    kv_free(l);
     return KAM_OK;
 }
 
@@ -336,8 +316,8 @@ void prefs_warn_unknown(void)
         return;
     for (size_t i = 0; i < l->n; i++) {
         bool known = false;
-        for (size_t k = 0; k < NPREF_KEYS; k++)
-            known |= !strcmp(l->v[i].key, PREF_KEYS[k]);
+        for (size_t k = 0; k < NPREFS; k++)
+            known |= !strcmp(l->v[i].key, PREFS[k].key);
         if (!known)
             warnmsg("%s: chave desconhecida ignorada: %s", P.prefs_conf, l->v[i].key);
     }
@@ -388,13 +368,12 @@ static int sbuf_kv(struct sbuf *b, const char *key, const char *val)
 
 int prefs_save(const struct prefs *c)
 {
-    const char *vals[NPREF_KEYS] = {c->mode, c->bundle, c->background, c->logo, c->menu_box, c->tone, c->on_fresh};
-    bool done[NPREF_KEYS] = {false};
+    bool done[NPREFS] = {false};
     char tpl[PATH_MAX];
     size_t len = 0;
-    for (size_t k = 0; k < NPREF_KEYS; k++)
-        if (!conf_value_safe(vals[k])) {
-            errmsg("valor invalido para %s", PREF_KEYS[k]);
+    for (size_t k = 0; k < NPREFS; k++)
+        if (!conf_value_safe(PREF_VAL(c, k))) {
+            errmsg("valor invalido para %s", PREFS[k].key);
             return KAM_EUSAGE;
         }
     char *old = read_file(P.prefs_conf, 1024 * 1024, &len);
@@ -410,10 +389,10 @@ int prefs_save(const struct prefs *c)
         const char *l = old + i, *nl = memchr(l, '\n', len - i);
         size_t ln = nl ? (size_t)(nl - l) : len - i;
         size_t k = 0;
-        while (k < NPREF_KEYS && !line_is_key(l, ln, PREF_KEYS[k]))
+        while (k < NPREFS && !line_is_key(l, ln, PREFS[k].key))
             k++;
-        if (k < NPREF_KEYS) {
-            bad = sbuf_kv(&out, PREF_KEYS[k], vals[k]);
+        if (k < NPREFS) {
+            bad = sbuf_kv(&out, PREFS[k].key, PREF_VAL(c, k));
             done[k] = true;
         } else {
             bad = sbuf_add(&out, l, ln) || sbuf_add(&out, "\n", 1);
@@ -421,9 +400,9 @@ int prefs_save(const struct prefs *c)
         i += nl ? ln + 1 : ln;
     }
     free(old);
-    for (size_t k = 0; k < NPREF_KEYS && !bad; k++)
+    for (size_t k = 0; k < NPREFS && !bad; k++)
         if (!done[k])
-            bad = sbuf_kv(&out, PREF_KEYS[k], vals[k]);
+            bad = sbuf_kv(&out, PREFS[k].key, PREF_VAL(c, k));
     int rc = KAM_OK;
     if (bad) {
         errmsg("sem memoria");

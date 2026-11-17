@@ -56,14 +56,8 @@ static void theme_version(const char *dir, char *out, size_t sz)
     if (!dir[0] || !is_regular(p))
         return;
     pathf(p, sizeof p, "%s/VERSION", dir);
-    char *buf = read_file(p, 256, NULL);
-    snprintf(out, sz, "0.0.0");
-    if (buf) {
-        trim(buf);
-        if (semver_valid(buf))
-            snprintf(out, sz, "%s", buf);
-        free(buf);
-    }
+    if (!semver_valid(read_value(p, out, sz)))
+        snprintf(out, sz, "0.0.0");
 }
 
 static void installed_manager_version(char *out, size_t sz)
@@ -117,6 +111,15 @@ static bool service_enabled(void)
     return sysctl("is-enabled", NULL, true, out, sizeof out) == 0 && !strcmp(out, "enabled");
 }
 
+/* Versao do tema no payload ("" se ausente ou invalida) */
+static void payload_theme_version(char *out, size_t outsz)
+{
+    char p[PATH_MAX];
+    pathf(p, sizeof p, "%s/theme-version", P.payload_dir);
+    if (!semver_valid(read_value(p, out, outsz)))
+        out[0] = '\0';
+}
+
 /* --- status -------------------------------------------------------- */
 int cmd_status(void)
 {
@@ -125,15 +128,8 @@ int cmd_status(void)
     printf("Kawaii Arch Manager %s\n\nComponentes\n", KAM_VERSION);
 
     /* Tema */
-    char ptv[64] = "";
-    pathf(p, sizeof p, "%s/theme-version", P.payload_dir);
-    char *tvb = read_file(p, 256, NULL);
-    if (tvb) {
-        trim(tvb);
-        if (semver_valid(tvb))
-            snprintf(ptv, sizeof ptv, "%s", tvb);
-        free(tvb);
-    }
+    char ptv[64];
+    payload_theme_version(ptv, sizeof ptv);
     theme_version(P.theme_dir, v, sizeof v);
     if (v[0])
         printf("  %-22s %-10s %s%s%s%s\n", "Tema", !strcmp(v, "0.0.0") ? "?" : v, P.theme_raw,
@@ -198,11 +194,8 @@ int cmd_status(void)
     char perr[256];
     if (prefs_check(&c, perr, sizeof perr) < 0)
         printf("  %-22s %s\n", "ERRO", perr);
-    char *lb = read_file(P.last_bg, 1024, NULL);
-    if (lb)
-        trim(lb);
-    printf("  %-22s %s\n", "Ultima aplicada", lb && *lb ? lb : "-");
-    free(lb);
+    char last[PATH_MAX];
+    printf("  %-22s %s\n", "Ultima aplicada", *read_value(P.last_bg, last, sizeof last) ? last : "-");
 
     if (P.theme_dir[0]) {
         struct png_info pi;
@@ -216,14 +209,12 @@ int cmd_status(void)
             printf("  %-22s ausente ou invalido (%s)\n", "Wallpaper ativo", e);
         }
         pathf(p, sizeof p, "%s/icons/.tone", P.theme_dir);
-        char *tone = read_file(p, 64, NULL);
-        if (tone)
-            trim(tone);
+        char tone[16];
+        read_value(p, tone, sizeof tone);
         printf("  %-22s %s\n", "Tom do tema",
-               tone && !strcmp(tone, "light") ? "light (wallpaper claro: texto e icones escuros)"
-               : tone && !strcmp(tone, "dark") ? "dark (wallpaper escuro: texto e icones claros)"
-                                                : "-");
-        free(tone);
+               !strcmp(tone, "light")  ? "light (wallpaper claro: texto e icones escuros)"
+               : !strcmp(tone, "dark") ? "dark (wallpaper escuro: texto e icones claros)"
+                                       : "-");
         int lg = theme_element_state("logo"), mb = theme_element_state("menu-box");
         printf("  %-22s %s\n", "Logo", lg == 1 ? "ligado" : lg == 0 ? "desligado" : "-");
         printf("  %-22s %s\n", "Contorno do menu", mb == 1 ? "ligado" : mb == 0 ? "desligado" : "-");
@@ -236,7 +227,6 @@ int cmd_status(void)
         printf("  %-22s %s\n", "Particao do tema",
                theme_mount_check(merr, sizeof merr) == KAM_OK ? "montada (ok)" : merr);
     }
-    printf("  %-22s %s\n", "Origem do caminho", P.theme_from_conf ? P.paths_conf : "descoberta automatica");
 
     size_t imgs = 0;
     long long tot = 0;
@@ -421,59 +411,33 @@ static int need_service(const char *what)
     return KAM_OK;
 }
 
-int cmd_enable_service(void)
+/* --enable-service | --disable-service | --start-service | --stop-service */
+int cmd_service(const char *act)
 {
-    int rc = need_service("--enable-service");
+    char opt[32];
+    snprintf(opt, sizeof opt, "--%s-service", act);
+    int rc = need_service(opt);
     if (rc)
         return rc;
-    if (sysctl("enable", NULL, false, NULL, 0) != 0) {
-        errmsg("falha ao habilitar %s", UNIT_NAME);
+    bool enable = !strcmp(act, "enable"), disable = !strcmp(act, "disable");
+    if (enable) {
+        if (sysctl("enable", NULL, false, NULL, 0) != 0) {
+            errmsg("falha ao habilitar %s", UNIT_NAME);
+            return KAM_EFAIL;
+        }
+        msg("Servico habilitado; iniciando uma execucao agora");
+        act = "start";
+    }
+    if (sysctl(act, disable ? "--now" : NULL, false, NULL, 0) != 0) {
+        if (!strcmp(act, "start"))
+            errmsg("o servico falhou; veja: journalctl -u %s", UNIT_NAME);
+        else
+            errmsg("falha ao %s %s", disable ? "desabilitar" : "parar", UNIT_NAME);
         return KAM_EFAIL;
     }
-    msg("Servico habilitado; iniciando uma execucao agora");
-    if (sysctl("start", NULL, false, NULL, 0) != 0) {
-        errmsg("o servico falhou; veja: journalctl -u %s", UNIT_NAME);
-        return KAM_EFAIL;
-    }
-    return KAM_OK;
-}
-
-int cmd_disable_service(void)
-{
-    int rc = need_service("--disable-service");
-    if (rc)
-        return rc;
-    if (sysctl("disable", "--now", false, NULL, 0) != 0) {
-        errmsg("falha ao desabilitar %s", UNIT_NAME);
-        return KAM_EFAIL;
-    }
-    msg("Servico desabilitado (o wallpaper atual e mantido).");
-    return KAM_OK;
-}
-
-int cmd_start_service(void)
-{
-    int rc = need_service("--start-service");
-    if (rc)
-        return rc;
-    if (sysctl("start", NULL, false, NULL, 0) != 0) {
-        errmsg("o servico falhou; veja: journalctl -u %s", UNIT_NAME);
-        return KAM_EFAIL;
-    }
-    msg("Servico executado.");
-    return KAM_OK;
-}
-
-int cmd_stop_service(void)
-{
-    int rc = need_service("--stop-service");
-    if (rc)
-        return rc;
-    if (sysctl("stop", NULL, false, NULL, 0) != 0) {
-        errmsg("falha ao parar %s", UNIT_NAME);
-        return KAM_EFAIL;
-    }
-    msg("Servico parado.");
+    if (!enable)
+        msg("%s", disable ? "Servico desabilitado (o wallpaper atual e mantido)."
+                 : !strcmp(act, "start") ? "Servico executado." : "Servico parado.");
     return KAM_OK;
 }
 
@@ -568,17 +532,13 @@ int cmd_update(void)
     msg("Kawaii Arch Manager %s (atualizado pelo install.sh do pacote)", KAM_VERSION);
 
     /* Tema: somente relatorio (copia para /boot e feita pelo instalador) */
-    pathf(p, sizeof p, "%s/theme-version", P.payload_dir);
-    char *tv = read_file(p, 256, NULL);
+    char tv[64];
+    payload_theme_version(tv, sizeof tv);
     theme_version(P.theme_dir, iv, sizeof iv);
-    if (tv) {
-        trim(tv);
-        if (iv[0] && semver_cmp(iv, tv) < 0)
-            msg("Tema: %s -> %s disponivel; execute o install.sh do pacote para atualizar", iv, tv);
-        else if (iv[0])
-            msg("Tema: %s (%s)", iv, cmp_label(iv, tv));
-        free(tv);
-    }
+    if (tv[0] && iv[0] && semver_cmp(iv, tv) < 0)
+        msg("Tema: %s -> %s disponivel; execute o install.sh do pacote para atualizar", iv, tv);
+    else if (tv[0] && iv[0])
+        msg("Tema: %s (%s)", iv, cmp_label(iv, tv));
 
     /* Helper */
     pathf(p, sizeof p, "%s/%s", P.payload_dir, HELPER_NAME);

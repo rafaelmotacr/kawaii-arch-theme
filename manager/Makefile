@@ -6,7 +6,7 @@
 #
 # Dependencias: compilador C11, libarchive e zlib (headers + bibliotecas).
 
-VERSION   := 1.5.0
+VERSION   := 1.5.1
 PREFIX    ?= /usr
 BINDIR    ?= $(PREFIX)/bin
 BUILD     ?= build

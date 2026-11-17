@@ -25,7 +25,6 @@ enum {
     KAM_ECANCEL = 6,   /* cancelado pelo usuario */
 };
 
-#define THEME_NAME "kawaii-arch-theme"
 #define ACTIVE_NAME "background.png"
 #define FALLBACK_NAME "fallback.png"
 #define HELPER_NAME "grub-random-bg.sh"
@@ -63,10 +62,9 @@ struct kam_paths {
     char unit_path[PATH_MAX];     /* /usr/lib/systemd/system/<unit> */
     char bin_path[PATH_MAX];      /* /usr/bin/kawaii-arch-manager */
     char theme_raw[PATH_MAX];     /* caminho real do tema (sem root) */
-    char theme_dir[PATH_MAX];     /* root + theme_raw, "" se desconhecido */
+    char theme_dir[PATH_MAX];     /* root + theme_raw; "" sem paths.conf valido */
     char expected_mount[PATH_MAX];
     char systemctl[PATH_MAX];
-    bool theme_from_conf;
 };
 
 struct kam_opts {
@@ -88,6 +86,9 @@ int confirm(const char *question, bool def); /* 1 sim, 0 nao, -1 sem tty */
 int confirm_rc(const char *question, bool def); /* KAM_OK ou codigo */
 int pathf(char *out, size_t sz, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 char *read_file(const char *path, size_t max, size_t *len);
+const char *read_value(const char *path, char *out, size_t sz);
+int write_all(int fd, const void *data, size_t len);
+ssize_t read_full(int fd, void *buf, size_t n);
 int write_file_atomic(const char *path, const char *data, size_t len, mode_t mode);
 int copy_file_atomic(const char *src, const char *dst, const char *tmp, mode_t mode);
 int mkdir_p(const char *path, mode_t mode);
@@ -112,7 +113,6 @@ int semver_cmp(const char *a, const char *b);
 struct kv_list;
 struct kv_list *kv_load(const char *path, int *err);
 const char *kv_get(const struct kv_list *l, const char *key);
-int kv_set(struct kv_list *l, const char *key, const char *val);
 void kv_free(struct kv_list *l);
 int kv_parse_buf(struct kv_list *l, const char *buf, size_t len, char *err, size_t errsz);
 struct kv_list *kv_new(void);
@@ -215,10 +215,7 @@ int unit_revision(const char *path);
 int cmd_status(void);
 int cmd_install_helper(void);
 int cmd_install_service(void);
-int cmd_enable_service(void);
-int cmd_disable_service(void);
-int cmd_start_service(void);
-int cmd_stop_service(void);
+int cmd_service(const char *act);
 int cmd_uninstall(const char *component);
 int cmd_update(void);
 bool service_installed(void);
