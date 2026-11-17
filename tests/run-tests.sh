@@ -28,6 +28,27 @@ expect_rc() {
 }
 section() { printf '\n\e[1m%s\e[0m\n' "$*"; }
 
+# Versoes: lidas das fontes canonicas (nunca fixadas aqui)
+MGR_VERSION="$(make -s -C "$PKG/manager" version)"
+HELPER_VERSION="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$PKG/helper/grub-random-bg.sh")"
+THEME_VERSION="$(tr -d '[:space:]' < "$PKG/grub-theme/VERSION")"
+UNIT_REV="$(sed -n 's/^# KAWAII-UNIT-REVISION=//p' "$PKG/systemd/grub-random-bg.service.in")"
+
+section "Consistencia das versoes e da documentacao"
+semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+check "versoes canonicas legiveis (manager $MGR_VERSION, helper $HELPER_VERSION, tema $THEME_VERSION, unidade rev $UNIT_REV)" \
+    bash -c "[[ '$MGR_VERSION' =~ $semver && '$HELPER_VERSION' =~ $semver && '$THEME_VERSION' =~ $semver && '$UNIT_REV' =~ ^[0-9]+\$ ]]"
+readme_ver() { awk -F'|' -v c="$1" 'index($2, c) == 2 { gsub(/ /, "", $3); print $3; exit }' "$PKG/README.md"; }
+check "README: tema = grub-theme/VERSION" test "$(readme_ver 'Tema GRUB')" = "$THEME_VERSION"
+check "README: manager = manager/Makefile" test "$(readme_ver 'Kawaii Arch Manager')" = "$MGR_VERSION"
+check "README: helper = VERSION do script" test "$(readme_ver 'Background Helper')" = "$HELPER_VERSION"
+check "README: unidade = KAWAII-UNIT-REVISION" test "$(readme_ver 'Servi')" = "rev$UNIT_REV"
+check "AGENTS.md: versoes atuais = fontes" grep -qx "Versões atuais: tema $THEME_VERSION, manager $MGR_VERSION, helper $HELPER_VERSION, unidade rev $UNIT_REV." "$PKG/AGENTS.md"
+check "documentacao nao anuncia --keep-config/--no-keep-config (recusadas)" \
+    bash -c "! grep -q -- 'keep-config' '$PKG/README.md' '$PKG/install.sh'"
+check "documentacao descreve backup, override e keep do ON_FRESH_INSTALL" \
+    bash -c "for v in backup override keep; do grep -q \"\\\`\$v\\\`\" '$PKG/README.md' || exit 1; done; grep -q 'ON_FRESH_INSTALL' '$PKG/install.sh'"
+
 # --- Ferramentas de teste --------------------------------------------
 # Gerador de PNG dos testes (um script, dois modos):
 #   mkpng ARQ [COR] [INTERLACE] [SEMENTE]   8x8 com padrao (cor 3 = paleta)
@@ -99,7 +120,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.5.1' ]]"
+check "--version = manager/Makefile ($MGR_VERSION)" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager $MGR_VERSION' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -253,7 +274,7 @@ expect_rc 0 "--status sem helper/servico" "$MGR" --status
 section "Background Helper"
 expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
 expect_rc 0 "--install-helper" "$MGR" --install-helper
-check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.2.1 ]]"
+check "helper --version = VERSION do script ($HELPER_VERSION)" bash -c "[[ \$('$HELPER' --version) == '$HELPER_VERSION' ]]"
 expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
 printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/preferences.conf"
 prev=""; rep=0
@@ -614,7 +635,7 @@ check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundl
 check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/preferences.conf"
 check "preferences.conf criado a partir do modelo comentado" bash -c "grep -q 'reload-confs' '$LD/config/preferences.conf' && grep -qx 'LOGO=\"on\"' '$LD/config/preferences.conf' && grep -qx 'MENU_BOX=\"on\"' '$LD/config/preferences.conf'"
 check "modelo das preferencias no payload" cmp -s "$PKG/config/preferences.conf" "$L/usr/share/kawaii-arch-manager/payload/preferences.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.5.1' ]]"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager $MGR_VERSION' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"

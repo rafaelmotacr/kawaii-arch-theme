@@ -287,8 +287,12 @@ tests/run-tests.sh [--keep]
   precisam entrar no filtro.
 - Os testes de tom geram PNGs sólidos (`mksolid`) e usam uma sandbox
   própria (`$R2`) com o tema completo do pacote.
-- Testes que conferem versões: `--version` do manager (duas vezes) e
-  `helper --version`.
+- Versões nos testes: lidas das fontes canônicas (`make -C manager
+  version`, `VERSION=` do helper, `grub-theme/VERSION` e
+  `KAWAII-UNIT-REVISION` da unidade), nunca fixadas. A seção "Consistência
+  das versões e da documentação" confere que a tabela de componentes do
+  README e a linha "Versões atuais" deste arquivo batem com elas, e que a
+  documentação não anuncia opções recusadas (`--keep-config`).
 
 ## 6. Versões
 
@@ -298,8 +302,8 @@ tests/run-tests.sh [--keep]
 - **Manager** (`VERSION` no `manager/Makefile`), **helper** (`VERSION=` no
   script), **unidade** (revisão) e **bundles** (`manifest.conf`): cada um na
   sua origem.
-- Atualize também a tabela de componentes do README e os testes que fixam
-  versões.
+- Atualize também a tabela de componentes do README e a linha "Versões
+  atuais" abaixo; os testes falham se divergirem.
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
