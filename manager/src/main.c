@@ -20,6 +20,8 @@ static void usage(FILE *f)
 "  --list-bundles                bundles instalados\n"
 "  --list-available-bundles [DIR]  pacotes .kawall disponiveis localmente\n"
 "                                (padrao: /usr/share/kawaii-arch-manager/payload/bundles)\n"
+"  --tone ARQUIVO.png            tom do wallpaper para o tema: dark (escuro,\n"
+"                                texto claro) ou light (claro, texto escuro)\n"
 "\n"
 "Bundles e selecao (root):\n"
 "  --import-bundle ARQ|DIR       valida e importa um pacote .kawall ou a pasta\n"
@@ -58,7 +60,7 @@ static void usage(FILE *f)
 enum cmd {
     C_NONE = 0, C_VERSION, C_STATUS, C_LIST, C_LIST_AVAIL, C_IMPORT, C_REMOVE, C_SET_BUNDLE,
     C_SET_MODE, C_SET_BG, C_RANDOMIZE, C_UPDATE, C_INST_HELPER, C_INST_SERVICE, C_ENABLE,
-    C_DISABLE, C_START, C_STOP, C_UNINSTALL, C_HELP
+    C_DISABLE, C_START, C_STOP, C_UNINSTALL, C_TONE, C_HELP
 };
 
 int main(int argc, char **argv)
@@ -83,6 +85,7 @@ int main(int argc, char **argv)
         {"start-service", no_argument, 0, C_START},
         {"stop-service", no_argument, 0, C_STOP},
         {"uninstall", required_argument, 0, C_UNINSTALL},
+        {"tone", required_argument, 0, C_TONE},
         {"help", no_argument, 0, C_HELP},
         {"yes", no_argument, 0, 'y'},
         {"force", no_argument, 0, 'f'},
@@ -128,6 +131,8 @@ int main(int argc, char **argv)
         printf("%s %s\n", KAM_PROG, KAM_VERSION);
         return KAM_OK;
     }
+    if (cmd == C_TONE)
+        return cmd_tone(arg);   /* somente leitura; nao depende da instalacao */
     if (cmd == C_NONE) {
         usage(stderr);
         return KAM_EUSAGE;

@@ -1,5 +1,17 @@
 # Main options
 title-text: ""
+#
+# Tom claro/escuro e logo (gerenciados pelo seletor de wallpaper):
+# ao aplicar um wallpaper, o Background Helper mede a claridade dele e
+# reescreve SO estes valores (o resto do arquivo nao e tocado):
+#   - caminhos "tones/dark/..." <-> "tones/light/..." (molduras do
+#     terminal e do menu, selecao e barra de tempo);
+#   - item_color e selected_item_color (de tones/<tom>/colors.conf);
+#   - o arquivo do logo: logos/<distro>-<tom>.png (fallback: arch).
+# O tom "dark" (abaixo) e o padrao: serve para wallpapers escuros e e o
+# usado quando o seletor nao esta instalado. Os icones nao estao aqui: o
+# GRUB so os le de icons/, entao o seletor copia para la o conjunto de
+# icon-sets/<tom>/.
 # Wallpaper ativo: arquivo unico, nunca altere este caminho.
 # O conteudo de background.png e trocado (copia atomica) pelo
 # Background Helper / kawaii-arch-manager; os bundles ficam em
@@ -7,7 +19,7 @@ title-text: ""
 desktop-image: "background.png"
 desktop-color: "#000000"
 terminal-font: "Terminus Regular 16"
-terminal-box: "terminal_box_*.png"
+terminal-box: "tones/dark/terminal_box_*.png"
 # Terminal centralizado: 60% x 60% da tela, com 20% de margem em cada lado.
 # Para mudar o tamanho, mantenha left = (100 - width) / 2 e
 # top = (100 - height) / 2 (apenas numeros inteiros).
@@ -39,7 +51,7 @@ terminal-border: "0"
   top = 36%-16
   width = 522
   height = 44%+32
-  menu_pixmap_style = "boot_menu_box_*.png"
+  menu_pixmap_style = "tones/dark/boot_menu_box_*.png"
   item_font = "Public Sans Bold 21"
   item_color = "#dddddd"
   selected_item_color = "#ffffff"
@@ -49,20 +61,20 @@ terminal-border: "0"
   item_height = 70
   item_padding = 3
   item_spacing = 13
-  selected_item_pixmap_style = "select_*.png"
+  selected_item_pixmap_style = "tones/dark/select_*.png"
   scrollbar = false
 }
 
 
 # >>> logo
 # (bloco ativado/desativado pelo install.sh - mantenha os marcadores)
-# Logo do Arch Linux
+# Logo da distribuicao (logos/<id>-<tom>.png, escolhido pelo seletor)
 # Mesma margem esquerda do menu, abaixo dele e acima da barra de progresso.
 # Tamanho original da imagem (256x85) para nao haver redimensionamento.
 # top = topo da barra (99%) - altura do logo (85) - folga (30) = 99%-115
 # Para mudar a folga, altere o numero: 99%-(85 + folga desejada).
 + image {
-  file = "arch-logo.png"
+  file = "logos/arch-dark.png"
   left = 5%
   top = 99%-115
   width = 256
@@ -89,5 +101,5 @@ terminal-border: "0"
   fg_color = "#ffffff"
   bg_color = "#0a0a0c"
   border_color = "#0a0a0c"
-  highlight_style = "progress_highlight_*.png"
+  highlight_style = "tones/dark/progress_highlight_*.png"
 }

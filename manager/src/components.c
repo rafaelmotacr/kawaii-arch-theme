@@ -208,6 +208,15 @@ int cmd_status(void)
         } else {
             printf("  %-22s ausente ou invalido (%s)\n", "Wallpaper ativo", e);
         }
+        pathf(p, sizeof p, "%s/icons/.tone", P.theme_dir);
+        char *tone = read_file(p, 64, NULL);
+        if (tone)
+            trim(tone);
+        printf("  %-22s %s\n", "Tom do tema",
+               tone && !strcmp(tone, "light") ? "light (wallpaper claro: texto e icones escuros)"
+               : tone && !strcmp(tone, "dark") ? "dark (wallpaper escuro: texto e icones claros)"
+                                                : "-");
+        free(tone);
         pathf(p, sizeof p, "%s/%s", P.theme_dir, FALLBACK_NAME);
         printf("  %-22s %s\n", "Fallback", png_check_file(p, NULL, e, sizeof e) == 0 ? "presente" : "ausente");
         char merr[512];

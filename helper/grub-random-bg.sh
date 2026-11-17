@@ -6,8 +6,17 @@
 #  copia atomicamente para <tema>/background.png. Funciona sem o
 #  kawaii-arch-manager: le diretamente a configuracao e os bundles.
 #
+#  Depois de aplicar, ajusta o tema a claridade do wallpaper (tom "dark"
+#  para wallpaper escuro, "light" para wallpaper claro): copia para
+#  <tema>/icons/ o conjunto de <tema>/icon-sets/<tom>/ e reescreve no
+#  theme.txt somente as cores do menu, os caminhos tones/<tom>/ e o logo
+#  (logos/<distro>-<tom>.png, distro lida de /etc/os-release; fallback:
+#  arch). A claridade e medida por 'kawaii-arch-manager --tone'; sem o
+#  manager, o tom e sempre "dark" (o visual padrao do tema).
+#
 #  Uso:
 #    grub-random-bg.sh              seleciona e aplica um wallpaper
+#    grub-random-bg.sh --retone     so reaplica o tom/logo do wallpaper ativo
 #    grub-random-bg.sh --dry-run    apenas mostra o que seria aplicado
 #    grub-random-bg.sh --quiet      sem mensagens informativas
 #    grub-random-bg.sh --version    mostra a versao
@@ -19,6 +28,7 @@
 #    /var/lib/kawaii-arch-manager/bundles/<id>/           bundles instalados
 #    /var/lib/kawaii-arch-manager/state/last-background   (escrita)
 #    <THEME_DIR>/background.png                           (escrita)
+#    <THEME_DIR>/theme.txt, <THEME_DIR>/icons/            (escrita: tom/logo)
 #
 #  Codigos de saida:
 #    0 wallpaper aplicado          3 configuracao invalida / nenhuma imagem
@@ -26,7 +36,8 @@
 #    2 argumento invalido          4 outra execucao em andamento (lock)
 #                                  5 sem permissao / particao nao montada
 #
-#  Nunca executa grub-mkconfig, nunca altera theme.txt nem os bundles.
+#  Nunca executa grub-mkconfig nem altera os bundles; no theme.txt so
+#  troca os valores gerenciados pelo tom (e so quando mudam).
 # =====================================================================
 
 set -uo pipefail
@@ -35,7 +46,7 @@ export LC_ALL=C
 
 # Versao do helper (SemVer). Lida como texto pelo instalador e pelo
 # manager (sem executar o script): mantenha o formato VERSION="x.y.z".
-VERSION="2.0.0"
+VERSION="2.1.0"
 
 readonly E_OK=0 E_FAIL=1 E_USAGE=2 E_CONFIG=3 E_BUSY=4 E_PERM=5
 
@@ -58,6 +69,7 @@ IMG_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,250}\.png$'
 
 DRY_RUN=0
 QUIET=0
+RETONE=0
 
 # --- Mensagens --------------------------------------------------------
 # Sob o systemd, stdout/stderr vao para o journal; o prefixo <N> define
@@ -76,7 +88,7 @@ log_err() {
     if ((JOURNAL)); then echo "<3>erro: $*" >&2; else echo "grub-random-bg: erro: $*" >&2; fi
 }
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^# =====/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 
 # --- Argumentos -------------------------------------------------------
 for arg in "$@"; do
@@ -85,6 +97,7 @@ for arg in "$@"; do
         --help|-h)    usage; exit $E_OK ;;
         --dry-run|-n) DRY_RUN=1 ;;
         --quiet|-q)   QUIET=1 ;;
+        --retone)     RETONE=1 ;;
         *) log_err "opcao desconhecida: $arg (use --help)"; exit $E_USAGE ;;
     esac
 done
@@ -421,11 +434,126 @@ apply_fallback() {
     return 1
 }
 
+# --- Tom (claro/escuro) e logo ----------------------------------------
+# O tom e o do WALLPAPER: "dark" (escuro: texto/icones claros, o padrao do
+# tema) ou "light" (claro: texto/icones escuros). Falhas aqui nunca
+# desfazem o wallpaper: no pior caso o tema fica no tom anterior.
+TONE_RE='^(dark|light)$'
+COLOR_RE='^#[0-9A-Fa-f]{6}$'
+DISTRO_RE='^[a-z0-9][a-z0-9._-]{0,63}$'
+
+# measure_tone ARQUIVO -> TONE (dark se o manager nao estiver disponivel)
+TONE="dark"
+measure_tone() {
+    local mgr="" out
+    TONE="dark"
+    if [[ -x "$ROOT/usr/bin/kawaii-arch-manager" ]]; then
+        mgr="$ROOT/usr/bin/kawaii-arch-manager"
+    elif [[ -z "$ROOT" ]]; then
+        mgr="$(command -v kawaii-arch-manager 2>/dev/null)" || mgr=""
+    fi
+    if [[ -z "$mgr" ]]; then
+        log_info "kawaii-arch-manager ausente; tom padrao (dark)"
+        return 0
+    fi
+    out="$("$mgr" --tone "$1" 2>/dev/null)" || out=""
+    if [[ "$out" =~ $TONE_RE ]]; then
+        TONE="$out"
+    else
+        log_warn "nao foi possivel medir a claridade de $1; tom padrao (dark)"
+    fi
+}
+
+# pick_logo -> LOGO (nome em logos/) ou "" se nenhum logo existir.
+# Ordem: ID, cada ID_LIKE e, por fim, arch (fallback oficial).
+LOGO=""
+pick_logo() {
+    local f cand ids=""
+    LOGO=""
+    for f in "$ROOT/etc/os-release" "$ROOT/usr/lib/os-release"; do
+        [[ -r "$f" ]] || continue
+        conf_get "$f" ID && ids="$CONF_VALUE"
+        conf_get "$f" ID_LIKE && ids="$ids $CONF_VALUE"
+        break
+    done
+    for cand in $ids arch; do
+        [[ "$cand" =~ $DISTRO_RE ]] || continue
+        if png_ok "$THEME_DIR/logos/$cand-$TONE.png"; then
+            LOGO="$cand-$TONE.png"; return 0
+        fi
+    done
+}
+
+# sync_icons: icons/ <- icon-sets/<tom>/ (arquivo a arquivo, atomico; o
+# GRUB so le icones de icons/). O marcador icons/.tone sai antes da copia
+# e volta por ultimo: uma copia interrompida fica sem marcador e e
+# completada na proxima execucao (arquivos iguais nao sao reescritos).
+sync_icons() {
+    local set="$THEME_DIR/icon-sets/$TONE" dst="$THEME_DIR/icons" cur="" f name changed=0
+    [[ -d "$set" && ! -L "$set" ]] || return 0
+    [[ -r "$dst/.tone" ]] && IFS= read -r cur < "$dst/.tone"
+    [[ "$cur" == "$TONE" ]] && return 0
+    mkdir -p -- "$dst" || return 1
+    rm -f -- "$dst/.tone" || return 1
+    shopt -s nullglob
+    for f in "$set"/*.png; do
+        name="${f##*/}"
+        [[ -f "$f" && ! -L "$f" ]] || continue
+        cmp -s -- "$f" "$dst/$name" && continue
+        cp --no-preserve=all -- "$f" "$dst/.$name.tmp" && mv -f -- "$dst/.$name.tmp" "$dst/$name" \
+            || { rm -f -- "$dst/.$name.tmp"; shopt -u nullglob; return 1; }
+        changed=1
+    done
+    shopt -u nullglob
+    ((changed)) && sync -f "$dst" 2>/dev/null
+    printf '%s\n' "$TONE" > "$dst/.tone.tmp" && mv -f -- "$dst/.tone.tmp" "$dst/.tone" \
+        || { rm -f -- "$dst/.tone.tmp"; return 1; }
+}
+
+# rewrite_theme: troca so os valores gerenciados do theme.txt e grava
+# (atomico) apenas se algo mudou. Linhas de comentario sao preservadas,
+# exceto o bloco do logo desativado pelo instalador ("#[logo] ").
+rewrite_theme() {
+    local tt="$THEME_DIR/theme.txt" tmp="$THEME_DIR/theme.txt.tmp" ic sic
+    conf_get "$THEME_DIR/tones/$TONE/colors.conf" ITEM_COLOR && ic="$CONF_VALUE" || ic=""
+    conf_get "$THEME_DIR/tones/$TONE/colors.conf" SELECTED_ITEM_COLOR && sic="$CONF_VALUE" || sic=""
+    [[ "$ic" =~ $COLOR_RE ]] || ic=""
+    [[ "$sic" =~ $COLOR_RE ]] || sic=""
+    awk -v tone="$TONE" -v ic="$ic" -v sic="$sic" -v logo="$LOGO" '
+        /^[[:space:]]*#/ && !/^#\[logo\] / { print; next }
+        {
+            gsub(/"tones\/(dark|light)\//, "\"tones/" tone "/")
+            if (ic != "" && $0 ~ /^[[:space:]]*item_color[[:space:]]*=/) sub(/"[^"]*"/, "\"" ic "\"")
+            if (sic != "" && $0 ~ /^[[:space:]]*selected_item_color[[:space:]]*=/) sub(/"[^"]*"/, "\"" sic "\"")
+            if (logo != "" && $0 ~ /file[[:space:]]*=[[:space:]]*"logos\//) sub(/"logos\/[^"]*"/, "\"logos/" logo "\"")
+            print
+        }' "$tt" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+    if cmp -s -- "$tmp" "$tt"; then rm -f -- "$tmp"; return 0; fi
+    grep -qx 'desktop-image: "background.png"' "$tmp" || { rm -f -- "$tmp"; return 1; }
+    chmod 0644 -- "$tmp"
+    sync -- "$tmp" 2>/dev/null
+    mv -f -- "$tmp" "$tt" || { rm -f -- "$tmp"; return 1; }
+    sync -f "$THEME_DIR" 2>/dev/null
+    return 0
+}
+
+# apply_tone: mede o wallpaper ativo e ajusta icones, cores e logo.
+# Temas sem tones/ (versoes antigas) sao deixados como estao.
+apply_tone() {
+    [[ -d "$THEME_DIR/tones/dark" && -d "$THEME_DIR/tones/light" ]] || return 0
+    measure_tone "$THEME_DIR/$ACTIVE_NAME"
+    pick_logo
+    sync_icons || log_warn "falha ao atualizar os icones do tom $TONE"
+    rewrite_theme || { log_warn "falha ao atualizar o theme.txt para o tom $TONE"; return 0; }
+    log_info "tom do tema: $TONE${LOGO:+ (logo: $LOGO)}"
+}
+
 # --- Execucao ---------------------------------------------------------
 main() {
     resolve_theme_dir || return $E_PERM
 
     if ((DRY_RUN)); then
+        ((RETONE)) && { log_err "--retone nao aceita --dry-run"; return $E_USAGE; }
         if select_image; then
             echo "$CHOSEN"
             return $E_OK
@@ -452,10 +580,17 @@ main() {
         log_err "sem permissao de escrita em $THEME_DIR (execute como root)"
         return $E_PERM
     fi
-    rm -f -- "$THEME_DIR/$ACTIVE_NAME.tmp"
+    rm -f -- "$THEME_DIR/$ACTIVE_NAME.tmp" "$THEME_DIR/theme.txt.tmp"
+
+    if ((RETONE)); then
+        png_ok "$THEME_DIR/$ACTIVE_NAME" || { log_err "wallpaper ativo ausente ou invalido"; return $E_FAIL; }
+        apply_tone
+        return $E_OK
+    fi
 
     if ! select_image; then
         apply_fallback || return $E_FAIL
+        apply_tone
         return $E_CONFIG
     fi
 
@@ -466,6 +601,7 @@ main() {
     fi
     save_last "$CHOSEN"
     log_info "wallpaper aplicado: $CHOSEN"
+    apply_tone
     return $E_OK
 }
 

@@ -13,7 +13,7 @@ script" para um sistema modular:
 
 | Termo | O que é | Onde fica |
 |---|---|---|
-| Tema | `theme.txt`, fontes `.pf2`, ícones, molduras, `background.png` (único wallpaper ativo) e `fallback.png` | `grub-theme/` → `/boot/grub/themes/kawaii-arch-theme/` |
+| Tema | `theme.txt`, fontes `.pf2`, `tones/{dark,light}/` (molduras, seleção, barra, cores), `icon-sets/{dark,light}/` + `icons/` (ativo), `logos/<distro>-<tom>.png`, `background.png` (único wallpaper ativo) e `fallback.png` | `grub-theme/` → `/boot/grub/themes/kawaii-arch-theme/` |
 | Manager | `kawaii-arch-manager`, binário C (libarchive) | `manager/` → `/usr/bin/` |
 | Helper | `grub-random-bg.sh`: escolhe e aplica um wallpaper | `helper/` → `/usr/lib/kawaii-arch-manager/` |
 | Serviço | `grub-random-bg.service`, oneshot no boot | `systemd/*.in` → `/usr/lib/systemd/system/` |
@@ -107,6 +107,40 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
      (`--import-bundle PASTA`), com as mesmas regras de segurança;
    - os testes geram o próprio pacote de teste com bundles sintéticos;
    - a especificação original foi para o `.gitignore`.
+6. **Tom adaptável e logo por distribuição** (tema 3.0.0, manager 1.2.0,
+   helper 2.1.0). Wallpapers claros deixavam ilegíveis o texto, os ícones
+   brancos, a faixa da barra e a palavra "arch" do logo. Decisões do
+   mantenedor: nada de configuração por bundle (`tones.conf`), cache ou
+   geração em tempo de boot; só dois tons com arquivos fixos, escolhidos no
+   momento em que o wallpaper é definido.
+   - **Medição:** `kawaii-arch-manager --tone ARQ` (`manager/src/tone.c`,
+     zlib) decodifica o PNG e amostra o menu (x 5–27%, y 36–64%) e o logo
+     (x 5–19%, y 88–97%). Escolhe `light` se a média geométrica de
+     (L + 0,05) passa de √(1,05 × (0,0111 + 0,05)), ou seja, quando o texto
+     `#1c1c22` dá mais contraste médio que o branco. Calibrado nos 44
+     wallpapers locais (8 ficam `light`). Não depende de `paths_init`.
+   - **Aplicação:** só no helper (`apply_tone`, também via `--retone`).
+     O manager sem helper instalado roda `bash payload/grub-random-bg.sh
+     --retone`, depois de soltar o lock. O instalador roda o helper do
+     pacote no fim (`apply_theme_tone`, depois dos componentes, porque o
+     manager pode ter acabado de ser instalado). Sem o manager: `dark`.
+   - **`theme.txt`:** o helper reescreve **só** as linhas não comentadas
+     (e as `#[logo] ` do bloco do logo desativado) com `"tones/dark|light/"`,
+     `item_color`, `selected_item_color` e `file = "logos/..."`. As cores
+     vêm de `tones/<tom>/colors.conf`. A escrita é atômica e só acontece se
+     algo mudar. O `theme.txt` do pacote é o tom `dark` e funciona sozinho.
+   - **Ícones:** o GRUB só lê `<tema>/icons/` (`icon_manager.c`, sem
+     subpastas; `icondir` fica no `grub.cfg`), e o `/boot` FAT não tem
+     links nem troca atômica de pastas. Por isso o helper apaga
+     `icons/.tone`, copia `icon-sets/<tom>/` arquivo a arquivo (sem
+     reescrever os iguais) e grava `.tone` por último. O pacote traz
+     `icons/` = `icon-sets/dark/` com `.tone` = `dark`.
+   - **Logo:** `logos/<id>-<tom>.png`; o `ID` e cada `ID_LIKE` de
+     `/etc/os-release` (via `conf_get`), com fallback `arch`.
+   - O preenchimento do terminal é igual nos dois tons; mudam o contorno e a
+     sombra/brilho externo (`make_glass.py --tone light`). A seleção, a
+     barra e os ícones `light` vêm de `tools/make_light_assets.py`.
+   - Mudança de regra: antes o helper "nunca alterava o `theme.txt`".
 
 ## 4. Convenções
 
@@ -136,9 +170,11 @@ tests/run-tests.sh [--keep]
 - Os testes do instalador usam um pacote copiado para a sandbox (`$PKGT`),
   com bundles sintéticos (`alpha`, `beta`, `gamma`); não dependem de
   `bundles/` do repositório.
-- O teste "/boot contém só um wallpaper ativo + fallback" filtra os PNGs do
-  tema por nome (`arch-logo`, `select_`, `terminal_box`, `boot_menu_box`,
-  `progress_`). Ao adicionar PNGs ao tema, inclua-os no filtro.
+- O teste "/boot contém só um wallpaper ativo + fallback" ignora os PNGs de
+  `icons/`, `icon-sets/`, `tones/` e `logos/`. PNGs novos na raiz do tema
+  precisam entrar no filtro.
+- Os testes de tom geram PNGs sólidos (`mksolid`) e usam uma sandbox
+  própria (`$R2`) com o tema completo do pacote.
 - Testes que conferem versões: `--version` do manager (duas vezes) e
   `helper --version`.
 
@@ -155,7 +191,7 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 2.2.1, manager 1.1.0, helper 2.0.0, unidade rev 2.
+Versões atuais: tema 3.0.0, manager 1.2.0, helper 2.1.0, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 
@@ -169,6 +205,12 @@ Versões atuais: tema 2.2.1, manager 1.1.0, helper 2.0.0, unidade rev 2.
   imagens: `fg_color`, `bg_color` e `border_color` são ignorados (ver
   `gui_progress_bar.c` do GRUB). E `fill_rect` do GRUB não mistura alfa: cores
   com transparência saem opacas. Para mudar a barra, altere o PNG.
+- Caminhos com subpasta funcionam em todo o `theme.txt` (molduras,
+  `file =`), exceto os ícones, que o GRUB só procura em `icons/`.
+- Ao mudar `icon-sets/dark/`, atualize também `icons/` do pacote, que é o
+  conjunto padrão (o teste "pacote: icons/ = icon-sets/dark" confere). Não
+  edite à mão o `theme.txt` instalado nas linhas gerenciadas pelo tom: o
+  helper as reescreve.
 - O nome de fonte no `theme.txt` é o nome interno do PF2 (por exemplo,
   `Public Sans Bold 21`, `Terminus Regular 16`), não o nome do arquivo.
 - O instalador só aceita bundles em `bundles/<id>/` com o nome da pasta igual

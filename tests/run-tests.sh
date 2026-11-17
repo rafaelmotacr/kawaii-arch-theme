@@ -47,6 +47,30 @@ png(args[0], color=int(args[1]) if len(args) > 1 else 2,
 EOF
 mkpng() { python3 -I "$T/mkpng.py" "$@"; }
 
+# PNG de cor solida para os testes de tom:
+#   mksolid ARQ COR(0|2|4|6) BITS(8|16) VALOR_ESQ VALOR_DIR [ALFA] [INTERLACE]
+# VALOR_ESQ preenche os 30% da esquerda (onde ficam o menu e o logo) e
+# VALOR_DIR o resto; ALFA (0-255) vale para os tipos com alfa.
+cat > "$T/mksolid.py" <<'EOF'
+import struct, sys, zlib
+def chunk(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+path, color, bits, left, right = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+alpha = int(sys.argv[6]) if len(sys.argv) > 6 else 255
+inter = int(sys.argv[7]) if len(sys.argv) > 7 else 0
+w, h = 200, 120
+def px(v):
+    ch = {0: [v], 2: [v, v, v], 4: [v, alpha], 6: [v, v, v, alpha]}[color]
+    return b"".join(bytes([c]) if bits == 8 else struct.pack(">H", c * 257) for c in ch)
+rows = []
+for y in range(h):
+    rows.append(b"\0" + b"".join(px(left if x < w * 0.3 else right) for x in range(w)))
+data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, bits, color, 0, 0, inter))
+data += chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+open(path, "wb").write(data)
+EOF
+mksolid() { python3 -I "$T/mksolid.py" "$@"; }
+
 # Bundle de teste: mkbundle DIR ID VERSAO N [nome]
 mkbundle() {
     local dir="$1" id="$2" ver="$3" n="$4" name="${5:-$2}" i
@@ -84,7 +108,7 @@ if make -s -C "$PKG/manager" BUILD="$T/build" >"$T/build.log" 2>&1; then ok "com
 else bad "compilacao"; cat "$T/build.log"; exit 1; fi
 MGR="$T/build/kawaii-arch-manager"
 check "binario ELF nativo" bash -c "head -c4 '$MGR' | grep -q ELF"
-check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.1.0' ]]"
+check "--version" bash -c "[[ \$('$MGR' --version) == 'kawaii-arch-manager 1.2.0' ]]"
 check "sem avisos de compilacao" bash -c "! grep -q warning: '$T/build.log'"
 expect_rc 2 "argumento invalido" "$MGR" --nao-existe
 expect_rc 2 "dois comandos" "$MGR" --status --list-bundles
@@ -238,7 +262,7 @@ expect_rc 0 "--status sem helper/servico" "$MGR" --status
 section "Background Helper"
 expect_rc 4 "install-service sem helper e recusado" "$MGR" --install-service
 expect_rc 0 "--install-helper" "$MGR" --install-helper
-check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.0.0 ]]"
+check "helper --version" bash -c "[[ \$('$HELPER' --version) == 2.1.0 ]]"
 expect_rc 0 "--install-helper idempotente" "$MGR" --install-helper
 printf 'MODE="set"\nSELECTED_BUNDLE="gothic"\nSELECTED_BACKGROUND=""\n' > "$DATA/config/backgrounds.conf"
 prev=""; rep=0
@@ -295,7 +319,7 @@ if unshare -rm true 2>/dev/null; then
         unshare -rm bash -c "mount --bind '$THEME' '$THEME' && mv '$HELPER' '$HELPER.off'; KAWAII_ROOT='$R' KAWAII_SKIP_ROOT_CHECK=1 '$MGR' --randomize; rc=\$?; mv '$HELPER.off' '$HELPER'; exit \$rc"
 fi
 check "troca de wallpaper nunca executa grub-mkconfig" test ! -e "$T/grub-mkconfig.log"
-check "theme.txt nunca e alterado pelo helper" cmp -s "$PKG/grub-theme/theme.txt" "$THEME/theme.txt"
+check "theme.txt de tema sem tones/ (antigo) nao e alterado" cmp -s "$PKG/grub-theme/theme.txt" "$THEME/theme.txt"
 expect_rc 0 "helper funciona sem o manager no PATH" env -i PATH=/usr/bin:/bin KAWAII_ROOT="$R" "$HELPER" -q
 
 section "Servico systemd"
@@ -334,6 +358,126 @@ mkbundle "$PKGT/bundles/alpha" alpha 1.0.0 3 Alpha
 mkbundle "$PKGT/bundles/beta" beta 1.0.0 2 Beta
 mkbundle "$PKGT/bundles/gamma" gamma 1.0.0 2 Gamma
 
+section "Tom do tema (claro/escuro) e logo"
+TS="$T/tones"; mkdir -p "$TS"
+mksolid "$TS/white.png" 2 8 255 255
+mksolid "$TS/black.png" 2 8 0 0
+expect_rc 0 "--tone funciona sem instalacao (somente leitura)" env -u KAWAII_ROOT "$MGR" --tone "$TS/white.png"
+check "--tone: branco -> light" bash -c "[[ \$('$MGR' --tone '$TS/white.png') == light ]]"
+check "--tone: preto -> dark" bash -c "[[ \$('$MGR' --tone '$TS/black.png') == dark ]]"
+for spec in "0 8" "0 16" "2 16" "4 8" "4 16" "6 8" "6 16"; do
+    set -- $spec
+    mksolid "$TS/w-$1-$2.png" "$1" "$2" 255 255; mksolid "$TS/k-$1-$2.png" "$1" "$2" 0 0
+    check "--tone: cor $1, $2 bits (branco light, preto dark)" bash -c "[[ \$('$MGR' --tone '$TS/w-$1-$2.png') == light && \$('$MGR' --tone '$TS/k-$1-$2.png') == dark ]]"
+done
+mksolid "$TS/clear.png" 6 8 255 255 0
+check "--tone: branco totalmente transparente (fundo preto) -> dark" bash -c "[[ \$('$MGR' --tone '$TS/clear.png') == dark ]]"
+mksolid "$TS/menu-white.png" 2 8 255 0
+mksolid "$TS/menu-black.png" 2 8 0 255
+check "--tone: so a area do menu/logo conta (claro a esquerda -> light)" bash -c "[[ \$('$MGR' --tone '$TS/menu-white.png') == light ]]"
+check "--tone: so a area do menu/logo conta (escuro a esquerda -> dark)" bash -c "[[ \$('$MGR' --tone '$TS/menu-black.png') == dark ]]"
+mksolid "$TS/mid.png" 2 8 110 110
+mksolid "$TS/mid2.png" 2 8 140 140
+check "--tone: limiar entre cinza medio escuro (110) e claro (140)" bash -c "[[ \$('$MGR' --tone '$TS/mid.png') == dark && \$('$MGR' --tone '$TS/mid2.png') == light ]]"
+mksolid "$TS/inter.png" 2 8 255 255 255 1
+expect_rc 3 "--tone: PNG entrelacado e recusado" "$MGR" --tone "$TS/inter.png"
+head -c 300 "$TS/white.png" > "$TS/trunc.png"
+expect_rc 3 "--tone: PNG truncado e recusado" "$MGR" --tone "$TS/trunc.png"
+python3 -I -c 'import sys
+d = bytearray(open(sys.argv[1], "rb").read())
+i = d.find(b"IDAT") + 8
+d[i:i + 40] = b"\xff" * 40
+open(sys.argv[2], "wb").write(d)' "$TS/white.png" "$TS/corrupt.png"
+expect_rc 3 "--tone: dados compactados corrompidos sao recusados" "$MGR" --tone "$TS/corrupt.png"
+expect_rc 3 "--tone: arquivo que nao e PNG" "$MGR" --tone "$PKG/README.md"
+ln -sf "$TS/white.png" "$TS/link.png"
+expect_rc 3 "--tone: link simbolico e recusado" "$MGR" --tone "$TS/link.png"
+
+# Sandbox com o tema completo do pacote
+R2="$T/tone-root"
+TT="$R2/boot/grub/themes/kawaii-arch-theme"
+TD="$R2/var/lib/kawaii-arch-manager"
+mkdir -p "$R2/boot/grub/themes" "$TD/config" "$TD/state" "$R2/usr/bin" "$R2/etc" \
+    "$R2/usr/share/kawaii-arch-manager/payload"
+cp -r "$PKG/grub-theme" "$TT"
+cp "$MGR" "$R2/usr/bin/"
+cp "$PKG/helper/grub-random-bg.sh" "$R2/usr/share/kawaii-arch-manager/payload/"
+printf 'THEME_DIR="/boot/grub/themes/kawaii-arch-theme"\nEXPECTED_MOUNT="%s"\n' "$(stat -c %m "$TT")" > "$TD/config/paths.conf"
+mkdir -p "$TD/bundles/tons/backgrounds"
+printf 'ID="tons"\nVERSION="1.0.0"\n' > "$TD/bundles/tons/manifest.conf"
+cp "$TS/white.png" "$TD/bundles/tons/backgrounds/claro.png"
+cp "$TS/black.png" "$TD/bundles/tons/backgrounds/escuro.png"
+printf 'ID=arch\n' > "$R2/etc/os-release"
+H2="$PKG/helper/grub-random-bg.sh"
+fixed() { printf 'MODE="fixed"\nSELECTED_BACKGROUND="tons/%s"\n' "$1" > "$TD/config/backgrounds.conf"; }
+logo_of() { sed -n -E 's/^[^#]*file[[:space:]]*=[[:space:]]*"logos\/([^"]+)".*/\1/p' "$TT/theme.txt"; }
+same_icons() { local f; for f in "$PKG/grub-theme/icon-sets/$1"/*.png; do cmp -s "$f" "$TT/icons/${f##*/}" || return 1; done; }
+
+check "pacote: icons/ = icon-sets/dark (tom padrao)" bash -c "diff -r -x .tone '$PKG/grub-theme/icons' '$PKG/grub-theme/icon-sets/dark' && [[ \$(cat '$PKG/grub-theme/icons/.tone') == dark ]]"
+check "pacote: tones/dark e tones/light com as mesmas pecas" bash -c "diff <(cd '$PKG/grub-theme/tones/dark' && ls) <(cd '$PKG/grub-theme/tones/light' && ls)"
+check "pacote: icon-sets/dark e icon-sets/light com os mesmos icones" bash -c "diff <(cd '$PKG/grub-theme/icon-sets/dark' && ls) <(cd '$PKG/grub-theme/icon-sets/light' && ls)"
+check "pacote: todos os caminhos do theme.txt existem" bash -c "cd '$PKG/grub-theme' && for p in \$(grep -v '^[[:space:]]*#' theme.txt | grep -oE '\"(tones|logos)/[^\"]+\"' | tr -d '\"'); do ls \$p >/dev/null 2>&1 || { echo \$p; exit 1; }; done"
+
+export KAWAII_ROOT="$R2"
+fixed claro.png
+expect_rc 0 "wallpaper claro aplicado" "$H2" -q
+check "  tom light: icons/.tone" bash -c "[[ \$(cat '$TT/icons/.tone') == light ]]"
+check "  icones = icon-sets/light" same_icons light
+check "  theme.txt usa tones/light/ (molduras, selecao, barra)" bash -c "[[ \$(grep -v '^[[:space:]]*#' '$TT/theme.txt' | grep -c '\"tones/light/') == 4 && \$(grep -v '^[[:space:]]*#' '$TT/theme.txt' | grep -c 'tones/dark/') == 0 ]]"
+check "  cores do menu de tones/light/colors.conf" bash -c "grep -q ' item_color = \"#1c1c22\"' '$TT/theme.txt' && grep -q 'selected_item_color = \"#000000\"' '$TT/theme.txt'"
+check "  logo arch-light.png" test "$(logo_of)" = arch-light.png
+check "  so as 7 linhas gerenciadas mudaram" test "$(diff "$PKG/grub-theme/theme.txt" "$TT/theme.txt" | grep -c '^>')" = 7
+check "  comentarios preservados" bash -c "diff <(grep '^#' '$PKG/grub-theme/theme.txt') <(grep '^#' '$TT/theme.txt')"
+check "  sem temporarios no tema" bash -c "! find '$TT' -name '*.tmp' | grep -q ."
+ino="$(stat -c %i "$TT/theme.txt")"; icon_ino="$(stat -c %i "$TT/icons/arch.png")"
+expect_rc 0 "mesmo tom de novo" "$H2" -q
+check "  theme.txt e icones nao sao reescritos sem mudanca" bash -c "[[ \$(stat -c %i '$TT/theme.txt') == $ino && \$(stat -c %i '$TT/icons/arch.png') == $icon_ino ]]"
+fixed escuro.png
+expect_rc 0 "wallpaper escuro aplicado" "$H2" -q
+check "  tom dark: theme.txt identico ao do pacote" cmp -s "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+check "  icones = icon-sets/dark" same_icons dark
+check "  marcador dark" bash -c "[[ \$(cat '$TT/icons/.tone') == dark ]]"
+
+# Copia de icones interrompida: sem marcador, a proxima execucao completa
+fixed claro.png; "$H2" -q
+cp "$PKG/grub-theme/icon-sets/dark/arch.png" "$TT/icons/arch.png"; rm -f "$TT/icons/.tone"
+"$H2" -q
+check "copia interrompida e completada na execucao seguinte" same_icons light
+
+printf 'NAME="EndeavourOS"\nID="endeavouros"\nID_LIKE="arch"\n' > "$R2/etc/os-release"
+"$H2" -q
+check "distro sem logo proprio (ID_LIKE=arch) -> logo do Arch" test "$(logo_of)" = arch-light.png
+cp "$TT/logos/arch-light.png" "$TT/logos/endeavouros-light.png"
+"$H2" -q
+check "distro com logos/<id>-<tom>.png usa o proprio logo" test "$(logo_of)" = endeavouros-light.png
+rm -f "$TT/logos/endeavouros-light.png"
+printf 'ID="../../x"\nID_LIKE="debian"\n' > "$R2/etc/os-release"
+"$H2" -q
+check "ID invalido/desconhecido -> fallback arch" test "$(logo_of)" = arch-light.png
+rm -f "$R2/etc/os-release"
+"$H2" -q
+check "sem os-release -> fallback arch" test "$(logo_of)" = arch-light.png
+
+sed -i '/^# >>> logo/,/^# <<< logo/{/^# >>> logo/b;/^# <<< logo/b;s/^/#[logo] /}' "$TT/theme.txt"
+fixed escuro.png; "$H2" -q
+check "logo desativado pelo instalador tambem acompanha o tom" bash -c "grep -q '^#\[logo\] .*file = \"logos/arch-dark.png\"' '$TT/theme.txt' && ! sed -n '/# >>> logo/,/# <<< logo/p' '$TT/theme.txt' | grep -q '^+ image'"
+cp "$PKG/grub-theme/theme.txt" "$TT/theme.txt"
+
+fixed claro.png
+mv "$R2/usr/bin/kawaii-arch-manager" "$T/mgr.off"
+expect_rc 0 "helper sem o manager" "$H2" -q
+check "  sem o manager o tom e dark" bash -c "[[ \$(cat '$TT/icons/.tone') == dark ]] && cmp -s '$PKG/grub-theme/theme.txt' '$TT/theme.txt'"
+mv "$T/mgr.off" "$R2/usr/bin/kawaii-arch-manager"
+expect_rc 0 "--retone so reajusta o tom do wallpaper ativo" "$H2" --retone -q
+check "  tom light sem trocar o wallpaper" bash -c "[[ \$(cat '$TT/icons/.tone') == light ]] && cmp -s '$TS/white.png' '$TT/background.png'"
+expect_rc 2 "--retone --dry-run e recusado" "$H2" --retone --dry-run
+
+expect_rc 0 "manager sem helper instalado: --set-background escuro" "$MGR" --set-background tons/escuro.png
+check "  tom ajustado pelo helper do payload" bash -c "[[ \$(cat '$TT/icons/.tone') == dark ]] && cmp -s '$PKG/grub-theme/theme.txt' '$TT/theme.txt'"
+check "  --status mostra o tom" bash -c "'$MGR' --status | grep -q 'Tom do tema .*dark'"
+check "tom nunca executa grub-mkconfig" test ! -e "$T/grub-mkconfig.log"
+export KAWAII_ROOT="$R"
+
 section "Instalador: instalacao completa"
 L="$T/full-root"
 LT="$L/boot/grub/themes/kawaii-arch-theme"
@@ -350,11 +494,12 @@ check "theme.txt aponta para background.png" grep -qx 'desktop-image: "backgroun
 check "fallback.png instalado" test -f "$LT/fallback.png"
 check "background.png veio de um bundle instalado" bash -c "for f in '$LD'/bundles/*/backgrounds/*.png; do cmp -s \"\$f\" '$LT/background.png' && exit 0; done; exit 1"
 check "configuracao inicial MODE=global" grep -qx 'MODE="global"' "$LD/config/backgrounds.conf"
-check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.1.0' ]]"
+check "manager compilado instalado em /usr/bin" bash -c "[[ \$('$L/usr/bin/kawaii-arch-manager' --version) == 'kawaii-arch-manager 1.2.0' ]]"
 check "helper e unidade instalados" bash -c "[[ -x '$L/usr/lib/kawaii-arch-manager/grub-random-bg.sh' && -f '$L/usr/lib/systemd/system/grub-random-bg.service' ]]"
 check "servico habilitado (--enable-service)" test -e "$T/systemctl.enabled"
 check "grub-mkconfig nao executado (nada exigia)" test ! -e "$T/grub-mkconfig.log"
 check "logo ativado por padrao" bash -c "sed -n '/# >>> logo/,/# <<< logo/p' '$LT/theme.txt' | grep -q '^+ image'"
+check "tom do tema coerente com o wallpaper ativo" bash -c "[[ \$(cat '$LT/icons/.tone') == \$('$L/usr/bin/kawaii-arch-manager' --tone '$LT/background.png') ]]"
 sha_before="$(cd "$L" && find . -type f ! -path './var/lib/kawaii-arch-manager/state/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum)"
 : > "$T/systemctl.log"
 expect_rc 0 "segunda execucao (idempotente)" "$PKGT/install.sh" --yes
@@ -455,7 +600,8 @@ S="$T/svc-root"; mkdir -p "$S/boot/grub"
 export KAWAII_ROOT="$S"
 expect_rc 0 "--without-helper --with-service --without-manager" "$PKGT/install.sh" --yes --without-helper --with-service --without-manager
 check "servico nao instalado sem o helper" test ! -e "$S/usr/lib/systemd/system/grub-random-bg.service"
-check "/boot contem so um wallpaper ativo + fallback" bash -c "[[ \$(find '$S/boot' -name '*.png' -path '*kawaii*' ! -path '*/icons/*' | grep -v -e arch-logo -e select_ -e terminal_box -e boot_menu_box -e progress_ | wc -l) == 2 ]]"
+check "/boot contem so um wallpaper ativo + fallback" bash -c "[[ \$(find '$S/boot' -name '*.png' -path '*kawaii*' ! -path '*/icons/*' ! -path '*/icon-sets/*' ! -path '*/tones/*' ! -path '*/logos/*' | wc -l) == 2 ]]"
+check "sem o manager o tom instalado e dark" bash -c "[[ \$(cat '$S/boot/grub/themes/kawaii-arch-theme/icons/.tone') == dark ]]"
 expect_rc 0 "--with-helper --with-service sem --enable-service" "$PKGT/install.sh" --yes --with-helper --with-service --without-manager
 check "servico instalado mas nao habilitado" bash -c "[[ -f '$S/usr/lib/systemd/system/grub-random-bg.service' && ! -e '$T/systemctl.enabled' ]]"
 unset KAWAII_ROOT

@@ -3,15 +3,19 @@
 #  make_glass.py - gera as molduras "liquid glass" do tema (script extra,
 #  nao versionado; os PNGs gerados e que fazem parte do tema)
 #
-#  Uso: python3 tools/make_glass.py [--out DIR] [--opacity A]
+#  Uso: python3 tools/make_glass.py [--tone dark|light] [--out DIR] [--opacity A]
 #
-#  Gera em DIR (padrao: grub-theme/ do pacote):
+#  Gera em DIR (padrao: grub-theme/tones/<tom>/ do pacote):
 #    terminal_box_{nw,n,ne,w,c,e,sw,s,se}.png   caixa do terminal (theme.txt:
-#        terminal-box): vidro escuro neutro + contorno claro
+#        terminal-box): vidro escuro neutro + contorno
 #    boot_menu_box_{nw,n,ne,w,e,sw,s,se}.png    contorno do menu de boot
 #        (theme.txt: menu_pixmap_style): mesma geometria e contorno do
 #        terminal, sem o preenchimento escuro (o menu ja e transparente;
 #        sem menu_c, o GRUB nao desenha nada no centro)
+#
+#  --tone: tom do WALLPAPER para o qual a moldura serve. dark (padrao):
+#  contorno claro e sombra externa escura; light: contorno escuro e brilho
+#  externo claro. O preenchimento do terminal e o mesmo nos dois tons.
 #
 #  --opacity: opacidade do vidro do terminal (padrao 0.72, calibrada para
 #  manter o texto do GRUB legivel ate sobre areas brancas do wallpaper).
@@ -54,8 +58,11 @@ def sdf_round_rect(x, y):
     return outside + inside - RADIUS
 
 
-def render(fill_alpha):
+def render(fill_alpha, tone="dark"):
     """Renderiza a caixa completa (W x H) em RGBA."""
+    # dark: contorno claro + sombra escura; light: o inverso
+    rim = np.ones(3) if tone == "dark" else np.array([18, 18, 22]) / 255.0
+    halo = np.zeros(3) if tone == "dark" else np.ones(3)
     ys, xs = np.mgrid[0:H * SS, 0:W * SS]
     x = (xs + 0.5) / SS
     y = (ys + 0.5) / SS
@@ -70,8 +77,8 @@ def render(fill_alpha):
         rgb = color * alpha[..., None] + rgb * (1 - alpha[..., None])
         a = alpha + a * (1 - alpha)
 
-    # sombra externa suave: destaca o contorno sobre wallpapers claros
-    over(np.zeros(3), np.where(d > 0, 0.22 * np.clip(1 - d / 2.0, 0, 1), 0))
+    # sombra (ou brilho) externa suave: separa o contorno do wallpaper
+    over(halo, np.where(d > 0, 0.22 * np.clip(1 - d / 2.0, 0, 1), 0))
 
     inside = (d <= 0).astype(float)
     if fill_alpha > 0:
@@ -84,9 +91,9 @@ def render(fill_alpha):
     rim_a = 0.38 + 0.22 * (1 - t) - 0.16 * (1 - b)
 
     # aro externo brilhante (~1.3px)
-    over(np.ones(3), rim_a * inside * np.clip(1 - (-d) / 1.3, 0, 1))
+    over(rim, rim_a * inside * np.clip(1 - (-d) / 1.3, 0, 1))
     # reflexo interno fraco (espessura do vidro), ~3px para dentro
-    over(np.ones(3), 0.10 * inside * np.exp(-((-d - 3.0) ** 2) / 1.5))
+    over(rim, 0.10 * inside * np.exp(-((-d - 3.0) ** 2) / 1.5))
 
     def down(arr):
         return arr.reshape(H, SS, W, SS, *arr.shape[2:]).mean(axis=(1, 3))
@@ -107,17 +114,20 @@ def save_tiles(full, out, prefix, names):
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description="Gera as molduras liquid glass do tema.")
-    ap.add_argument("--out", default=os.path.join(here, "..", "grub-theme"),
-                    help="diretorio de saida (padrao: grub-theme/)")
+    ap.add_argument("--tone", choices=("dark", "light"), default="dark",
+                    help="tom do wallpaper (padrao: dark)")
+    ap.add_argument("--out", default=None,
+                    help="diretorio de saida (padrao: grub-theme/tones/<tom>/)")
     ap.add_argument("--opacity", type=float, default=0.72,
                     help="opacidade do vidro do terminal, 0..1 (padrao 0.72)")
     args = ap.parse_args()
     if not 0 <= args.opacity <= 1:
         sys.exit("make_glass: --opacity deve estar entre 0 e 1")
-    os.makedirs(args.out, exist_ok=True)
+    out = args.out or os.path.join(here, "..", "grub-theme", "tones", args.tone)
+    os.makedirs(out, exist_ok=True)
 
-    save_tiles(render(args.opacity), args.out, "terminal_box", TILES)
-    save_tiles(render(0.0), args.out, "boot_menu_box",
+    save_tiles(render(args.opacity, args.tone), out, "terminal_box", TILES)
+    save_tiles(render(0.0, args.tone), out, "boot_menu_box",
                [n for n in TILES if n != "c"])
 
 

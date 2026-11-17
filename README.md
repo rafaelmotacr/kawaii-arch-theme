@@ -19,6 +19,10 @@ com imagens que você tenha direito de usar (ver
 - **Visual "liquid glass":** caixa do terminal em vidro escuro translúcido e
   contorno de vidro no menu de boot, pensados para combinar com qualquer
   wallpaper.
+- **Tom adaptável:** em wallpapers claros, o texto, os ícones, as bordas, a
+  seleção, a barra de tempo e o logo ficam escuros; nos escuros, claros.
+- **Logo da distribuição:** escolhido pelo `/etc/os-release`, com o do Arch
+  como padrão.
 - **Nada é obrigatório:** sem nenhum componente opcional e sem bundles, o
   tema funciona com o wallpaper padrão.
 
@@ -26,9 +30,9 @@ com imagens que você tenha direito de usar (ver
 
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
-| Tema GRUB | 2.2.1 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.1.0 | `/usr/bin/kawaii-arch-manager` | não |
-| Background Helper (bash) | 2.0.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
+| Tema GRUB | 3.0.0 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
+| Kawaii Arch Manager (C, binário nativo) | 1.2.0 | `/usr/bin/kawaii-arch-manager` | não |
+| Background Helper (bash) | 2.1.0 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
 
@@ -40,11 +44,12 @@ independente, sem downgrade automático.
 - GRUB 2 com saída gráfica (`gfxterm`). O instalador detecta `/boot/grub` ou
   `/boot/grub2` e aceita `--grub-dir`.
 - `bash`, `coreutils` e `systemd` (este último só para o serviço).
-- Para compilar o manager: `gcc`, `make` e `libarchive`. No Arch:
-  `pacman -S --needed base-devel libarchive`. Sem eles, o instalador avisa e
-  continua com o tema e os demais componentes.
+- Para compilar o manager: `gcc`, `make`, `libarchive` e `zlib`. No Arch:
+  `pacman -S --needed base-devel libarchive zlib`. Sem eles, o instalador
+  avisa e continua com o tema e os demais componentes (o tom do tema fica
+  sempre escuro, porque é o manager que mede a claridade do wallpaper).
 - Só para desenvolvimento: `python3` (testes) e Python 3 com Pillow e NumPy
-  (`tools/make_glass.py`).
+  (`tools/make_glass.py` e `tools/make_light_assets.py`).
 
 ## Instalação rápida
 
@@ -89,7 +94,7 @@ Opções:
 | `--enable-service` | habilita o serviço (consentimento explícito) |
 | `--bundles all\|none\|ID,...` | bundles da pasta local `bundles/` a instalar (aceita IDs ou os números da lista) |
 | `--no-bundles` | o mesmo que `--bundles none` |
-| `--logo` / `--no-logo` | exibe ou oculta o logo do Arch abaixo do menu |
+| `--logo` / `--no-logo` | exibe ou oculta o logo da distribuição abaixo do menu |
 | `--grub-dir DIR` | diretório do GRUB (padrão: detectado) |
 | `--fresh` | instalação limpa |
 | `--keep-config` / `--no-keep-config` | só com `--fresh`: mantém ou descarta a configuração de wallpapers |
@@ -228,6 +233,7 @@ removido antes de se escolher outro.
 kawaii-arch-manager --status                    componentes, versões, configuração, serviço
 kawaii-arch-manager --list-bundles              bundles instalados (ID, versão, imagens, tamanho)
 kawaii-arch-manager --list-available-bundles [DIR]   pacotes .kawall disponíveis localmente
+kawaii-arch-manager --tone ARQUIVO.png          tom do wallpaper: dark ou light
 sudo kawaii-arch-manager --import-bundle ARQUIVO.kawall | PASTA
 sudo kawaii-arch-manager --remove-bundle ID
 sudo kawaii-arch-manager --set-bundle ID
@@ -289,9 +295,12 @@ O helper:
 - usa `flock` e confere a montagem do tema;
 - copia a imagem para `background.png.tmp` no próprio diretório do tema,
   valida, faz `sync` e então o `rename(2)` atômico sobre `background.png`;
-- só depois atualiza `last-background`.
+- só depois atualiza `last-background`;
+- por fim, ajusta o [tom do tema](#tom-claro-ou-escuro) ao wallpaper aplicado.
 
-Ele nunca altera o `theme.txt` nem os bundles, e nunca roda `grub-mkconfig`.
+Ele nunca altera os bundles e nunca roda `grub-mkconfig`. No `theme.txt`, só
+troca os valores gerenciados pelo tom, e só quando eles mudam.
+`grub-random-bg.sh --retone` reaplica o tom ao wallpaper ativo sem trocá-lo.
 
 O caminho real do tema fica em `config/paths.conf` (`THEME_DIR`,
 `EXPECTED_MOUNT`). O helper se recusa a escrever se o ponto de montagem não
@@ -311,16 +320,16 @@ Logs: `journalctl -u grub-random-bg.service`.
 ## Visual
 
 O tema mantém o layout minimalista do KawaiiGRUB: só o menu de boot (ícone +
-nome de cada sistema), o logo do Arch (opcional) e a barra de tempo (uma
-faixa branca, sem fundo, que cresce na base da tela). Sobre essa base:
+nome de cada sistema), o logo da distribuição (opcional) e a barra de tempo
+(uma faixa, sem fundo, que cresce na base da tela). Sobre essa base:
 
 - **Caixa do terminal** (mensagens de carregamento e console,
-  `terminal_box_*.png`): vidro escuro neutro com 72% de opacidade e contorno
-  claro. A cor neutra acompanha qualquer paleta de wallpaper. A opacidade foi
+  `tones/<tom>/terminal_box_*.png`): vidro escuro neutro com 72% de
+  opacidade e contorno claro (escuro no tom `light`). A cor neutra acompanha qualquer paleta de wallpaper. A opacidade foi
   calibrada para manter o texto do GRUB legível até sobre áreas brancas. O
   GRUB não desfoca o fundo, então o efeito de vidro vem da transparência, do
   contorno e de um reflexo interno.
-- **Contorno do menu de boot** (`boot_menu_box_*.png`, via
+- **Contorno do menu de boot** (`tones/<tom>/boot_menu_box_*.png`, via
   `menu_pixmap_style`): o mesmo contorno, sem preenchimento. O GRUB desenha
   essa moldura dentro dos limites do menu e reserva 16 px de cada lado. Por
   isso os limites no `theme.txt` são a área das entradas expandida em 16 px
@@ -328,6 +337,50 @@ faixa branca, sem fundo, que cresce na base da tela). Sobre essa base:
 
 Para ajustar o vidro (por exemplo, a opacidade), use
 [`tools/make_glass.py`](#ferramentas).
+
+### Tom claro ou escuro
+
+Texto branco some num wallpaper claro, e texto escuro, num escuro. Por isso,
+sempre que um wallpaper é aplicado, a claridade dele é medida nas áreas onde
+há texto (o menu e o logo), e o tema passa a usar um de dois tons:
+
+| | `dark` (wallpaper escuro, padrão) | `light` (wallpaper claro) |
+|---|---|---|
+| Texto do menu | `#dddddd`, selecionado `#ffffff` | `#1c1c22`, selecionado `#000000` |
+| Ícones | brancos (`icon-sets/dark/`) | escuros (`icon-sets/light/`) |
+| Bordas do terminal e do menu, seleção, barra de tempo | claras (`tones/dark/`) | escuras (`tones/light/`) |
+| Logo | `logos/<distro>-dark.png` | `logos/<distro>-light.png` |
+
+O preenchimento da caixa do terminal é o mesmo nos dois tons: o vidro escuro
+já deixa o texto do terminal legível em qualquer fundo.
+
+Como funciona:
+- **Medição:** `kawaii-arch-manager --tone ARQUIVO.png` decodifica o PNG e
+  escolhe o tom que dá mais contraste médio ao texto. O helper e o
+  instalador usam esse comando. Sem o manager, o tom é sempre `dark`, que é
+  o visual padrão do tema.
+- **Cores, bordas, seleção, barra e logo:** o helper reescreve só essas
+  linhas do `theme.txt` (os caminhos `tones/dark/` ↔ `tones/light/`,
+  `item_color`, `selected_item_color` e o arquivo do logo). As cores de
+  cada tom vêm de `tones/<tom>/colors.conf`.
+- **Ícones:** o GRUB só lê ícones de `icons/`, então o helper copia para lá
+  o conjunto do tom, um arquivo por vez (troca atômica). O marcador
+  `icons/.tone` registra o tom aplicado. Os arquivos só são copiados quando
+  o tom muda.
+- O tom atual aparece em `kawaii-arch-manager --status`. Para reaplicá-lo
+  ao wallpaper ativo: `sudo /usr/lib/kawaii-arch-manager/grub-random-bg.sh --retone`.
+
+### Logo da distribuição
+
+O logo é `logos/<id>-<tom>.png`, sem subpastas. O helper lê o
+`/etc/os-release` e tenta o `ID` e depois cada `ID_LIKE`. Se nenhum arquivo
+existir, usa o do Arch (`arch-dark.png` ou `arch-light.png`). Por exemplo, o
+EndeavourOS (`ID=endeavouros`, `ID_LIKE=arch`) mostra o logo do Arch até
+alguém adicionar `endeavouros-dark.png` e `endeavouros-light.png`.
+
+Para suportar outra distribuição, adicione os dois PNGs em
+`grub-theme/logos/`, com até 256x85 px, 8 bits RGBA e sem entrelaçamento. O
+nome é o `ID` do `os-release`. Depois suba a versão do tema.
 
 ## Solução de problemas
 
@@ -338,7 +391,9 @@ Para ajustar o vidro (por exemplo, a opacidade), use
 | O wallpaper não troca a cada boot | é preciso ter bundles instalados (`kawaii-arch-manager --list-bundles`) e o serviço instalado **e** habilitado (`--status`); veja `journalctl -u grub-random-bg.service` |
 | Erro 5 / "partição não montada" | o tema está numa partição que não estava montada; confira `EXPECTED_MOUNT` em `/var/lib/kawaii-arch-manager/config/paths.conf` |
 | Nome de entrada cortado no menu | aumente `width` do `boot_menu` no `theme.txt`, mantendo os +32 px do contorno |
-| Texto do terminal difícil de ler | regenere a caixa com mais opacidade: `python3 tools/make_glass.py --opacity 0.8` |
+| Texto do terminal difícil de ler | regenere a caixa com mais opacidade: `python3 tools/make_glass.py --opacity 0.8` (e `--tone light`) |
+| Texto/ícones claros num wallpaper claro | o tom é medido pelo manager: confira se ele está instalado e o tom em `--status`; veja o que ele mede com `kawaii-arch-manager --tone /boot/grub/themes/kawaii-arch-theme/background.png` e reaplique com `sudo /usr/lib/kawaii-arch-manager/grub-random-bg.sh --retone` |
+| Logo de outra distribuição não aparece | o arquivo precisa ser `logos/<ID>-dark.png` e `logos/<ID>-light.png`, com o `ID` (ou um `ID_LIKE`) do `/etc/os-release` |
 | Menu lento para aparecer | wallpaper muito grande; use imagens na resolução da tela |
 
 ## Desenvolvimento
@@ -347,8 +402,12 @@ Para ajustar o vidro (por exemplo, a opacidade), use
 
 ```text
 install.sh                      instalador (bootstrap): tema + componentes opcionais
-grub-theme/                     arquivos do tema (theme.txt, fontes, ícones,
-                                molduras, background.png padrão, fallback.png, VERSION)
+grub-theme/                     arquivos do tema: theme.txt, fontes, background.png
+                                padrão, fallback.png, VERSION e
+  tones/{dark,light}/           molduras, seleção, barra e cores de cada tom
+  icon-sets/{dark,light}/       ícones de cada tom
+  icons/                        ícones ativos (cópia de um icon-set; GRUB lê daqui)
+  logos/                        logos por distribuição: <id>-<tom>.png
 bundles/                        bundles locais para o instalador (ignorados pelo git,
                                 exceto bundles/README.md)
 helper/grub-random-bg.sh        Background Helper
@@ -356,6 +415,7 @@ systemd/grub-random-bg.service.in   modelo da unidade (@THEME_DIR@)
 manager/                        código-fonte C + Makefile do manager
 tools/make-kawall.sh            empacota a pasta de um bundle em .kawall
 tools/make_glass.py             extra: regenera as molduras liquid glass
+tools/make_light_assets.py      extra: gera seleção, barra e ícones do tom light
 tests/run-tests.sh              testes em sandbox (não exigem root)
 licenses/                       textos das licenças de terceiros (OFL)
 AGENTS.md                       contexto do projeto para agentes e colaboradores
@@ -375,6 +435,9 @@ bundles. Não exigem root nem alteram o sistema. Cobrem:
 - pacotes e pastas maliciosos (path traversal, links, arquivos especiais,
   limites);
 - os quatro modos e suas distribuições de probabilidade;
+- a medição do tom (`--tone`) em todos os formatos de PNG aceitos e com PNGs
+  inválidos, a troca de ícones, cores, bordas e logo, a retomada de uma
+  cópia interrompida e a escolha do logo pelo `os-release`;
 - casos de falha (partição desmontada, `fstab`, configuração inválida,
   fallback) e o diretório do tema bind-montado, como faz o `ReadWritePaths=`;
 - instalação completa, seleção de bundles, pacote sem bundles, atualização
@@ -387,16 +450,26 @@ bundles. Não exigem root nem alteram o sistema. Cobrem:
   bundle num `.kawall` determinístico (dono root, permissões 0644/0755, zstd
   ou gzip).
 - **`tools/make_glass.py`** (script extra, **sem versão própria**, ao
-  contrário dos componentes) gera `terminal_box_*.png` e `boot_menu_box_*.png` em
-  `grub-theme/`. Requer Python 3 com Pillow e NumPy.
+  contrário dos componentes) gera `terminal_box_*.png` e
+  `boot_menu_box_*.png` em `grub-theme/tones/<tom>/`. Requer Python 3 com
+  Pillow e NumPy.
 
   ```sh
-  python3 tools/make_glass.py                 # regrava os PNGs em grub-theme/
+  python3 tools/make_glass.py                 # tom dark (contorno claro)
+  python3 tools/make_glass.py --tone light    # tom light (contorno escuro)
   python3 tools/make_glass.py --opacity 0.65  # vidro do terminal mais claro
   python3 tools/make_glass.py --out /tmp/x    # gera em outro diretório
   ```
 
-  Os PNGs gerados fazem parte do tema: ao alterá-los, suba a versão do tema.
+- **`tools/make_light_assets.py`** (extra, sem versão própria) gera as peças
+  do tom `light` a partir das do `dark`: a seleção e a faixa da barra em
+  `tones/light/`, e os ícones em `icon-sets/light/` (glifos em tons de cinza
+  com a luminosidade invertida; ícones coloridos são copiados sem mudança).
+  Rode depois de mudar um ícone ou a seleção do tom `dark`.
+
+Os PNGs gerados fazem parte do tema: ao alterá-los, suba a versão do tema.
+Ao mudar `icon-sets/dark/`, copie-o também para `icons/` (o conjunto
+padrão do pacote).
 
 ### Versões
 
@@ -429,6 +502,7 @@ visuais novos compatíveis, major para mudanças incompatíveis. O
 | Versões independentes, sem downgrade | SemVer por componente; `--status` / `--update` |
 | Reinstalação preserva dados e configuração | testes de atualização, idempotência e `--keep-config` |
 | Troca de wallpaper sem `grub-mkconfig` | teste com `grub-mkconfig` falso |
+| Tom ajustado sem quebrar o tema | só linhas gerenciadas do `theme.txt`, escrita atômica e só quando muda; sem o manager, tom `dark` |
 
 Observação: as fontes `.pf2` ficam na raiz do tema, porque o
 `/etc/grub.d/00_header` só as carrega de lá.

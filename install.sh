@@ -41,7 +41,7 @@
 #                           troca de wallpapers / wallpaper fixo, o estado da
 #                           rotacao e o wallpaper ativo (padrao: pergunta;
 #                           com --yes, mantem)
-#    --logo | --no-logo     exibe/oculta o logo do Arch abaixo do menu
+#    --logo | --no-logo     exibe/oculta o logo da distribuicao abaixo do menu
 #    --grub-dir DIR         diretorio do GRUB (padrao: detectado)
 #    -h, --help
 # =====================================================================
@@ -76,7 +76,7 @@ DEFAULT_GRUB="$ROOT/etc/default/grub"
 
 if [[ -n "$ROOT" ]]; then SYSTEMCTL="${KAWAII_SYSTEMCTL:-}"; else SYSTEMCTL="systemctl"; fi
 
-LOGO_FILE="arch-logo.png"
+LOGO_FILE="logos/arch-dark.png"   # logo padrao (o seletor de tom troca o arquivo)
 LOGO_BEGIN='^# >>> logo'
 LOGO_END='^# <<< logo'
 ID_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
@@ -379,7 +379,7 @@ plan() {
     local cur="${OLD_LOGO_STATE:-on}" def=S
     [[ "$cur" == off ]] && def=N
     if [[ -n "$OPT_LOGO" ]]; then WANT_LOGO="$OPT_LOGO"
-    elif ask_yn "Exibir o logo do Arch Linux abaixo do menu?" "$def"; then WANT_LOGO=on
+    elif ask_yn "Exibir o logo da distribuicao (Arch Linux por padrao) abaixo do menu?" "$def"; then WANT_LOGO=on
     else WANT_LOGO=off
     fi
 
@@ -805,9 +805,10 @@ install_manager() {
     [[ -n "$cc_bin" ]] || missing+=("compilador C (gcc)")
     command -v make >/dev/null || missing+=("make")
     [[ -f /usr/include/archive.h ]] || missing+=("libarchive (headers)")
+    [[ -f /usr/include/zlib.h ]] || missing+=("zlib (headers)")
     if ((${#missing[@]})); then
         warn "nao e possivel compilar o manager; faltam: ${missing[*]}"
-        note "No Arch Linux: pacman -S --needed base-devel libarchive"
+        note "No Arch Linux: pacman -S --needed base-devel libarchive zlib"
         return 1
     fi
     local bdir log
@@ -911,6 +912,32 @@ install_components() {
             note "Servico instalado e desabilitado. Para habilitar: sudo kawaii-arch-manager --enable-service"
         fi
     fi
+}
+
+# ---------------------------------------------------------------------
+# Tom do tema (claro/escuro) e logo da distribuicao
+# ---------------------------------------------------------------------
+# Usa o helper do pacote (mesma regra do servico; nao precisa estar
+# instalado). A claridade e medida pelo manager; sem ele, o tom e "dark".
+# Roda depois dos componentes (o manager pode ter acabado de ser
+# instalado) e so escreve no /boot o que mudou.
+apply_theme_tone() {
+    [[ -d "$THEME_DIR/tones" ]] || return 0
+    section "Tom do tema"
+    if ! bash "$SRC_HELPER" --retone --quiet; then
+        warn "nao foi possivel ajustar o tom do tema ao wallpaper; mantido o atual"
+        return 0
+    fi
+    local tone="" logo
+    [[ -r "$THEME_DIR/icons/.tone" ]] && tone="$(head -n1 "$THEME_DIR/icons/.tone")"
+    logo="$(sed -n -E 's/^[^#]*file[[:space:]]*=[[:space:]]*"logos\/([^"]+)".*/\1/p' "$THEME_FILE" | head -n1)"
+    case "$tone" in
+        light) info "Tom: light (wallpaper claro: texto, icones e bordas escuros)" ;;
+        *)     info "Tom: dark (wallpaper escuro: texto, icones e bordas claros)" ;;
+    esac
+    [[ -x "$BIN_PATH" ]] || note "Sem o kawaii-arch-manager a claridade nao e medida; o tom fica sempre dark"
+    [[ "$WANT_LOGO" == on && -n "$logo" ]] && note "Logo: logos/$logo"
+    return 0
 }
 
 # ---------------------------------------------------------------------
@@ -1241,6 +1268,7 @@ do_install() {
     finish_keep
     setup_bg_config
     install_components
+    apply_theme_tone
     setup_default_grub
     regen_grub_cfg
     summary

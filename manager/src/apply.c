@@ -2,7 +2,10 @@
  *
  * Se o Background Helper estiver instalado, ele e usado (fonte unica da
  * regra de selecao). Caso contrario, o manager executa a funcionalidade
- * equivalente implementada aqui, com as mesmas regras e garantias. */
+ * equivalente implementada aqui, com as mesmas regras e garantias, e
+ * ajusta o tom do tema (icones, cores, logo) com a copia do helper que
+ * fica no payload ('grub-random-bg.sh --retone'): uma unica implementacao
+ * dessa regra. */
 #include "kam.h"
 
 #include <errno.h>
@@ -247,8 +250,25 @@ static int keep_or_fallback(void)
     return -1;
 }
 
+/* Ajusta o tom do tema ao wallpaper ativo usando o helper do payload
+ * (nao precisa estar instalado). Falhas so geram aviso. */
+static void retone_from_payload(void)
+{
+    char h[PATH_MAX];
+    pathf(h, sizeof h, "%s/%s", P.payload_dir, HELPER_NAME);
+    if (!is_regular(h)) {
+        note("Helper ausente no payload; o tom do tema nao foi ajustado");
+        return;
+    }
+    char *argv[] = {"bash", h, "--retone", "--quiet", NULL};
+    int r = run_cmd(argv, NULL, 0, false);
+    if (r != 0)
+        warnmsg("nao foi possivel ajustar o tom do tema ao wallpaper (codigo %d)", r);
+}
+
 static int apply_internal(void)
 {
+    bool retone = false;
     char err[512], last[ID_MAX + 2 + IMG_NAME_MAX] = "";
     struct bgconf c;
     bool have;
@@ -305,6 +325,7 @@ static int apply_internal(void)
     if (sel < 0) {
         errmsg("%s", err);
         rc = keep_or_fallback() == 0 ? KAM_EBUNDLE : KAM_EFAIL;
+        retone = rc == KAM_EBUNDLE;
         goto out;
     }
     char src[PATH_MAX], dst[PATH_MAX], tmp[PATH_MAX], e[128] = "";
@@ -324,9 +345,12 @@ static int apply_internal(void)
         warnmsg("nao foi possivel atualizar %s", P.last_bg);
     msg("Wallpaper aplicado: %s/%s", ch.b->id, ch.im->name);
     rc = KAM_OK;
+    retone = true;
 out:
-    close(lk);
+    close(lk);   /* o helper usa o mesmo lock */
     bundles_free(v, n);
+    if (retone)
+        retone_from_payload();
     return rc;
 }
 

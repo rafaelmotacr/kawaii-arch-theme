@@ -134,6 +134,10 @@ struct png_info { unsigned w, h; int depth, color; };
 int png_check_buf(const unsigned char *b, size_t n, struct png_info *pi, char *err, size_t errsz);
 int png_check_file(const char *path, struct png_info *pi, char *err, size_t errsz);
 
+/* tone.c */
+int png_tone(const char *path, const char **tone, double *score_out, char *err, size_t errsz);
+int cmd_tone(const char *path);
+
 /* bundle.c */
 struct image {
     char name[IMG_NAME_MAX + 1];

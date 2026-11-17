@@ -7,8 +7,8 @@ parte continua sob a licença original.
 
 | Componente | Arquivos | Origem | Licença |
 |---|---|---|---|
-| KawaiiGRUB (base do tema) | estrutura do `theme.txt`, `select_*.png`, `icons/` (inclusive `memtest86.png` e `snapshots.png`, cópias renomeadas de `memtest.png` e `restart.png` para casar com as classes de entrada desses nomes) | [Gabbar-v7/KawaiiGRUB](https://github.com/Gabbar-v7/KawaiiGRUB), © 2024 Gabbar | MIT (aviso mantido em [`LICENSE`](LICENSE)) |
-| CyberRe (inspiração da barra de carregamento) | formato do bloco `progress_bar` do `theme.txt` (posição e altura); cores e `progress_highlight_c.png` são próprios | tema GRUB CyberRe, © 2020 L. Henrique Lopes (HENK) ([GNOME-Look / KDE Store](https://store.kde.org/p/1420727)) | a página original não declara licença; o pacote AUR `grub-theme-cyberre` o distribui como CC0 1.0 |
+| KawaiiGRUB (base do tema) | estrutura do `theme.txt`, `tones/dark/select_*.png`, `icon-sets/dark/` e `icons/` (inclusive `memtest86.png` e `snapshots.png`, cópias renomeadas de `memtest.png` e `restart.png` para casar com as classes de entrada desses nomes). `tones/light/select_*.png` e `icon-sets/light/` são versões escuras derivadas desses arquivos (`tools/make_light_assets.py`) | [Gabbar-v7/KawaiiGRUB](https://github.com/Gabbar-v7/KawaiiGRUB), © 2024 Gabbar | MIT (aviso mantido em [`LICENSE`](LICENSE)) |
+| CyberRe (inspiração da barra de carregamento) | formato do bloco `progress_bar` do `theme.txt` (posição e altura); cores e `tones/*/progress_highlight_c.png` são próprios | tema GRUB CyberRe, © 2020 L. Henrique Lopes (HENK) ([GNOME-Look / KDE Store](https://store.kde.org/p/1420727)) | a página original não declara licença; o pacote AUR `grub-theme-cyberre` o distribui como CC0 1.0 |
 | Public Sans | `PublicSans_Bold_21.pf2` | [uswds/public-sans](https://github.com/uswds/public-sans), © 2015 The Public Sans Project Authors | SIL OFL 1.1 ([`licenses/OFL-1.1-PublicSans.txt`](licenses/OFL-1.1-PublicSans.txt)) |
 | Terminus Font | `terminus-16.pf2` | [terminus-font.sourceforge.net](https://terminus-font.sourceforge.net/), © 2012 Dimitar Toshkov Zhekov | SIL OFL 1.1, com o nome reservado "Terminus Font" ([`licenses/OFL-1.1-Terminus.txt`](licenses/OFL-1.1-Terminus.txt)) |
 
@@ -19,8 +19,11 @@ arquivos em `licenses/`).
 
 ## Marcas
 
-O logotipo do Arch Linux (`arch-logo.png`) e os ícones de distribuições e
-sistemas em `grub-theme/icons/` são marcas dos respectivos donos. Eles
+Os logotipos em `grub-theme/logos/` (o do Arch Linux em duas versões:
+`arch-dark.png`, com texto claro, e `arch-light.png`, a versão oficial com
+texto escuro) e os ícones de distribuições e sistemas em
+`grub-theme/icon-sets/` e `grub-theme/icons/` (inclusive as versões
+recoloridas) são marcas dos respectivos donos. Eles
 aparecem aqui apenas para identificar os sistemas no menu de boot. Não estão
 cobertos pela licença MIT, e seu uso não indica afiliação nem endosso.
 

@@ -4,9 +4,9 @@
 #   make install DESTDIR=...   instala binario em $(BINDIR)
 #   make clean
 #
-# Dependencias: compilador C11 e libarchive (headers + biblioteca).
+# Dependencias: compilador C11, libarchive e zlib (headers + bibliotecas).
 
-VERSION   := 1.1.0
+VERSION   := 1.2.0
 PREFIX    ?= /usr
 BINDIR    ?= $(PREFIX)/bin
 BUILD     ?= build
@@ -17,7 +17,7 @@ CFLAGS    += -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wformat=2 -Wshadow -Wno-forma
              -fstack-protector-strong -D_FORTIFY_SOURCE=3 -fPIE
 CPPFLAGS  += -DKAM_VERSION=\"$(VERSION)\"
 LDFLAGS   += -pie -Wl,-z,relro,-z,now
-LDLIBS    += -larchive
+LDLIBS    += -larchive -lz -lm
 
 SRCS := $(wildcard src/*.c)
 OBJS := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
