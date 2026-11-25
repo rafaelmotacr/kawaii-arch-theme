@@ -120,10 +120,8 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
    momento em que o wallpaper é definido.
    - **Medição:** `kawaii-arch-manager --tone ARQ` (`manager/src/tone.c`,
      zlib) decodifica o PNG e amostra o menu (x 5–27%, y 36–64%) e o logo
-     (x 5–19%, y 88–97%). Escolhe `light` se a média geométrica de
-     (L + 0,05) passa de √(1,05 × (0,0111 + 0,05)), ou seja, quando o texto
-     `#1c1c22` dá mais contraste médio que o branco. Calibrado nos 44
-     wallpapers locais (8 ficam `light`). Não depende de `paths_init`.
+     (x 5–19%, y 88–97%). O critério original (média geométrica de
+     L + 0,05) foi trocado no item 12. Não depende de `paths_init`.
    - **Aplicação:** só no helper (`apply_tone`, também via `--retone`).
      O manager sem helper instalado roda `bash payload/grub-random-bg.sh
      --retone`, depois de soltar o lock. O instalador roda o helper do
@@ -254,6 +252,24 @@ A especificação original descrevia a arquitetura de tema 2.0.0, manager
       e testes para `MODE` ausente, `paths.conf` ausente, `balanced` sem
       repetição e `--start-service`/`--stop-service`.
 
+12. **Tom escolhido por legibilidade** (manager 1.5.2). O mantenedor achou
+    que o `dark` vinha sendo escolhido demais. A análise mostrou que a
+    medição já era só nas áreas do menu e do logo e que o `dark` era o tom
+    legível na maioria dos casos; os erros eram empates. Mudanças:
+    - por ponto amostrado, o texto `#1c1c22` é legível se L ≥ 0,1333 e o
+      `#dddddd` (a cor real do texto no tom `dark`, não o branco) se
+      L ≤ 0,2077, ambos com contraste ≥ 3:1 (texto grande);
+    - cada área (menu e logo) dá a fração de pontos legíveis para cada tom,
+      e as duas têm o mesmo peso. Antes, os pontos eram somados, e o peso do
+      logo dependia da resolução da imagem;
+    - vence `light` se a fração do texto escuro ≥ a do claro − 0,05: empates
+      técnicos (cores médias e uniformes) ficam com o `light`. Sem a
+      tolerância, o vermelho sólido (3,6:1) caía em `dark` por um pixel;
+    - conferido em 43 wallpapers locais (8 → 11 `light`: `solid-colors/3` e
+      `4` e `anime-eyes/5`) e em 43 externos de outra coleção (nenhuma
+      mudança; a decisão mais apertada tinha 16 pontos de margem);
+    - `KAM_TONE_DEBUG=1` mostra as duas porcentagens.
+
 ## 4. Convenções
 
 - **Idioma:** documentação e mensagens em português. O README usa acentos;
@@ -307,7 +323,7 @@ tests/run-tests.sh [--keep]
 - Patch para correções e ajustes; minor para funções ou recursos visuais
   novos compatíveis; major para mudanças incompatíveis.
 
-Versões atuais: tema 3.1.1, manager 1.5.1, helper 2.2.1, unidade rev 2.
+Versões atuais: tema 3.1.1, manager 1.5.2, helper 2.2.1, unidade rev 2.
 
 ## 7. Armadilhas conhecidas
 

@@ -151,7 +151,8 @@ int cmd_set_logo(const char *arg);
 int cmd_set_menu_box(const char *arg);
 
 /* tone.c */
-int png_tone(const char *path, const char **tone, double *score_out, char *err, size_t errsz);
+int png_tone(const char *path, const char **tone, double *dark_out, double *light_out, char *err,
+             size_t errsz);
 int cmd_tone(const char *path);
 
 /* bundle.c */

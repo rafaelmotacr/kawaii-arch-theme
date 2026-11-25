@@ -6,11 +6,15 @@
  * se o tema usa o tom "dark" (texto/icones claros, para wallpaper escuro)
  * ou "light" (texto/icones escuros, para wallpaper claro).
  *
- * Criterio: para cada pixel amostrado, o texto escuro (#1c1c22) da mais
- * contraste que o claro (#ffffff) quando (L + 0.05)^2 > 1.05 * (Ld + 0.05),
- * sendo L a luminancia relativa do pixel. Usamos a media geometrica de
- * (L + 0.05) na area: o tom escolhido e o que maximiza o contraste medio
- * (em escala logaritmica), o que tambem pesa as regioes mistas. */
+ * Criterio (legibilidade): em cada ponto amostrado, o texto escuro
+ * (#1c1c22) e legivel se o contraste WCAG chega a 3:1 (texto grande; o
+ * menu usa negrito de 21 px), o que equivale a L >= 0.1333; o texto claro
+ * (#dddddd, ITEM_COLOR do tom dark), se L <= 0.2077. Em cada area conta-se a fracao de pontos
+ * legiveis para cada tom; as duas areas tem o mesmo peso (independe da
+ * resolucao). Vence "light" se o texto escuro e legivel em pelo menos
+ * tantos pontos quanto o claro, com tolerancia de 5 pontos percentuais:
+ * empates (cores medias e uniformes, em que os dois sao legiveis) ficam
+ * com o tom claro. */
 #include "kam.h"
 
 #include <errno.h>
@@ -27,14 +31,21 @@
  * (ate ~27%) e as primeiras entradas (~4 x 83 px de 1080) ficam ate ~64%,
  * onde quase sempre ha texto (o resto do menu costuma ficar vazio).
  * Logo: left 5%, 256x85 px acima da barra (~88% a 97% em 1080p).
- * Calibrado nos 44 wallpapers dos bundles originais. */
+ * Conferido nos 43 wallpapers dos bundles locais e em 43 externos. */
 static const struct { double x0, y0, x1, y1; } AREAS[] = {
     {0.05, 0.36, 0.27, 0.64},
     {0.05, 0.88, 0.19, 0.97},
 };
 #define NAREAS (sizeof AREAS / sizeof AREAS[0])
 #define SAMPLES_PER_AXIS 160    /* amostragem por area (passo uniforme) */
-#define TEXT_DARK_L 0.0111      /* luminancia de #1c1c22 */
+#define TEXT_DARK_L 0.0111      /* luminancia de #1c1c22 (ITEM_COLOR do tom light) */
+#define TEXT_LIGHT_L 0.7231     /* luminancia de #dddddd (ITEM_COLOR do tom dark) */
+#define MIN_CONTRAST 3.0        /* WCAG: texto grande */
+/* L do fundo a partir do qual o texto escuro e legivel / ate o qual o
+ * texto claro e legivel */
+#define DARK_TEXT_MIN_L (MIN_CONTRAST * (TEXT_DARK_L + 0.05) - 0.05)
+#define LIGHT_TEXT_MAX_L ((TEXT_LIGHT_L + 0.05) / MIN_CONTRAST - 0.05)
+#define TIE_TOLERANCE 0.05      /* empate tecnico favorece o tom claro */
 
 struct reader {
     FILE *f;
@@ -46,8 +57,8 @@ struct reader {
     unsigned y;                     /* linha atual */
     unsigned ymax;                  /* ultima linha necessaria (exclusiva) */
     double lin[256];
-    double acc;
-    unsigned long long n;
+    /* por area: pontos amostrados e legiveis para texto escuro / claro */
+    unsigned long long n[NAREAS], dark_ok[NAREAS], light_ok[NAREAS];
     /* limites amostrados por area */
     unsigned ax0[NAREAS], ax1[NAREAS], ay0[NAREAS], ay1[NAREAS], sx[NAREAS], sy[NAREAS];
 };
@@ -104,8 +115,9 @@ static void sample_row(struct reader *r)
                     a = s[3 * step] / 255.0;
             }
             L *= a;   /* transparencia: desktop-color do tema e preto */
-            r->acc += log(L + 0.05);
-            r->n++;
+            r->n[k]++;
+            r->dark_ok[k] += L >= DARK_TEXT_MIN_L;
+            r->light_ok[k] += L <= LIGHT_TEXT_MAX_L;
         }
     }
 }
@@ -138,8 +150,9 @@ static int read_exact(FILE *f, void *buf, size_t n)
     return fread(buf, 1, n, f) == n ? 0 : -1;
 }
 
-/* png_tone_score: media de log(L + 0.05) nas areas do texto */
-static int png_tone_score(const char *path, double *score, char *err, size_t errsz)
+/* png_tone_cover: fracao media (areas com o mesmo peso) de pontos em que
+ * o texto escuro (*dark) e o claro (*light) sao legiveis */
+static int png_tone_cover(const char *path, double *dark, double *light, char *err, size_t errsz)
 {
     struct reader r = {0};
     unsigned char hdr[33], buf[65536], out[65536];
@@ -257,11 +270,15 @@ static int png_tone_score(const char *path, double *score, char *err, size_t err
         }
     }
 done:
-    if (r.y < r.ymax || !r.n) {
-        snprintf(err, errsz, "PNG incompleto (%u de %u linhas)", r.y, r.h);
-        goto out;
+    *dark = *light = 0;
+    for (size_t k = 0; k < NAREAS; k++) {
+        if (r.y < r.ymax || !r.n[k]) {
+            snprintf(err, errsz, "PNG incompleto (%u de %u linhas)", r.y, r.h);
+            goto out;
+        }
+        *dark += (double)r.dark_ok[k] / (double)r.n[k] / NAREAS;
+        *light += (double)r.light_ok[k] / (double)r.n[k] / NAREAS;
     }
-    *score = r.acc / (double)r.n;
     rc = 0;
 out:
     if (zinit)
@@ -272,32 +289,33 @@ out:
     return rc;
 }
 
-int png_tone(const char *path, const char **tone, double *score_out, char *err, size_t errsz)
+int png_tone(const char *path, const char **tone, double *dark_out, double *light_out, char *err,
+             size_t errsz)
 {
-    double score;
+    double dark, light;
     err[0] = '\0';
-    if (png_tone_score(path, &score, err, errsz) < 0)
+    if (png_tone_cover(path, &dark, &light, err, errsz) < 0)
         return -1;
-    /* texto escuro vence quando (L+0.05)^2 > 1.05 * (Ld+0.05) */
-    double threshold = 0.5 * log(1.05 * (TEXT_DARK_L + 0.05));
-    *tone = score > threshold ? "light" : "dark";
-    if (score_out)
-        *score_out = exp(score) - 0.05;   /* luminancia "media" equivalente */
+    *tone = dark >= light - TIE_TOLERANCE ? "light" : "dark";
+    if (dark_out)
+        *dark_out = dark;
+    if (light_out)
+        *light_out = light;
     return 0;
 }
 
 int cmd_tone(const char *path)
 {
     const char *tone;
-    double eq;
+    double dark, light;
     char err[256];
-    if (png_tone(path, &tone, &eq, err, sizeof err) < 0) {
+    if (png_tone(path, &tone, &dark, &light, err, sizeof err) < 0) {
         errmsg("nao foi possivel medir %s: %s", path, err);
         return KAM_EBUNDLE;
     }
     printf("%s\n", tone);
     if (getenv("KAM_TONE_DEBUG"))
-        fprintf(stderr, "%s: luminancia equivalente %.3f (limiar %.3f)\n", path, eq,
-                sqrt(1.05 * (TEXT_DARK_L + 0.05)) - 0.05);
+        fprintf(stderr, "%s: texto escuro legivel em %.1f%%, texto claro em %.1f%% (contraste >= %.0f:1)\n",
+                path, 100 * dark, 100 * light, MIN_CONTRAST);
     return KAM_OK;
 }

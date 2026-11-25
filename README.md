@@ -31,7 +31,7 @@ com imagens que você tenha direito de usar (ver
 | Componente | Versão | Instalado em | Obrigatório |
 |---|---|---|---|
 | Tema GRUB | 3.1.1 | `/boot/grub/themes/kawaii-arch-theme/` | sim |
-| Kawaii Arch Manager (C, binário nativo) | 1.5.1 | `/usr/bin/kawaii-arch-manager` | não |
+| Kawaii Arch Manager (C, binário nativo) | 1.5.2 | `/usr/bin/kawaii-arch-manager` | não |
 | Background Helper (bash) | 2.2.1 | `/usr/lib/kawaii-arch-manager/grub-random-bg.sh` | não |
 | Serviço systemd | rev 2 | `/usr/lib/systemd/system/grub-random-bg.service` | não (exige o helper) |
 | Bundles de wallpapers (não incluídos no repositório) | por bundle | `/var/lib/kawaii-arch-manager/bundles/<id>/` | não |
@@ -429,8 +429,13 @@ O preenchimento da caixa do terminal é o mesmo nos dois tons: o vidro escuro
 já deixa o texto do terminal legível em qualquer fundo.
 
 Como funciona:
-- **Medição:** `kawaii-arch-manager --tone ARQUIVO.png` decodifica o PNG e
-  escolhe o tom que dá mais contraste médio ao texto. O helper e o
+- **Medição:** `kawaii-arch-manager --tone ARQUIVO.png` decodifica o PNG e,
+  nas áreas do menu e do logo (com o mesmo peso), conta em quantos pontos
+  cada cor de texto fica legível (contraste de pelo menos 3:1, o mínimo para
+  texto grande). Vence o tom cujo texto é legível em mais pontos; num empate
+  técnico (até 5 pontos percentuais de diferença, como em cores médias e
+  uniformes, em que os dois são legíveis), vence o `light`. Com
+  `KAM_TONE_DEBUG=1`, o comando mostra as duas porcentagens. O helper e o
   instalador usam esse comando. Sem o manager, o tom é sempre `dark`, que é
   o visual padrão do tema. Para fixar um tom, use `TONE="dark"` ou
   `TONE="light"` no [`preferences.conf`](#preferências) e rode

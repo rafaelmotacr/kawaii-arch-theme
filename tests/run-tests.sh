@@ -50,11 +50,14 @@ check "documentacao descreve backup, override e keep do ON_FRESH_INSTALL" \
     bash -c "for v in backup override keep; do grep -q \"\\\`\$v\\\`\" '$PKG/README.md' || exit 1; done; grep -q 'ON_FRESH_INSTALL' '$PKG/install.sh'"
 
 # --- Ferramentas de teste --------------------------------------------
-# Gerador de PNG dos testes (um script, dois modos):
+# Gerador de PNG dos testes (um script, quatro modos):
 #   mkpng ARQ [COR] [INTERLACE] [SEMENTE]   8x8 com padrao (cor 3 = paleta)
 #   mksolid ARQ COR(0|2|4|6) BITS(8|16) VALOR_ESQ VALOR_DIR [ALFA] [INTERLACE]
 #     200x120 solido: VALOR_ESQ nos 30% da esquerda (onde ficam o menu e
 #     o logo), VALOR_DIR no resto; ALFA (0-255) vale para os tipos com alfa
+#   mkbands ARQ LARGURA ALTURA CINZA_MENU CINZA_LOGO
+#     RGB 8 bits: CINZA_MENU nos 75% de cima, CINZA_LOGO no resto
+#   mkrgb ARQ R G B                         200x120 de uma cor RGB
 cat > "$T/png.py" <<'EOF'
 import struct, sys, zlib
 def chunk(t, d):
@@ -72,6 +75,12 @@ if mode == "pattern":
     bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color]
     rows = [bytes([(seed * 37 + x * 13 + y) & 255 for x in range(8 * bpp)]) for y in range(8)]
     write(path, 8, 8, 8, color, arg(1, 0), rows)
+elif mode == "rgb":
+    write(path, 200, 120, 8, 2, 0, [bytes(a) * 200] * 120)
+elif mode == "bands":
+    w, h, top, bottom = a
+    rows = [bytes([top if y < h * 3 // 4 else bottom] * 3 * w) for y in range(h)]
+    write(path, w, h, 8, 2, 0, rows)
 else:
     color, bits, left, right, alpha = a[0], a[1], a[2], a[3], arg(4, 255)
     def px(v):
@@ -82,6 +91,8 @@ else:
 EOF
 mkpng() { python3 -I "$T/png.py" pattern "$@"; }
 mksolid() { python3 -I "$T/png.py" solid "$@"; }
+mkbands() { python3 -I "$T/png.py" bands "$@"; }
+mkrgb() { python3 -I "$T/png.py" rgb "$@"; }
 
 # Bundle de teste: mkbundle DIR ID VERSAO N [nome]
 mkbundle() {
@@ -403,9 +414,21 @@ mksolid "$TS/menu-white.png" 2 8 255 0
 mksolid "$TS/menu-black.png" 2 8 0 255
 check "--tone: so a area do menu/logo conta (claro a esquerda -> light)" bash -c "[[ \$('$MGR' --tone '$TS/menu-white.png') == light ]]"
 check "--tone: so a area do menu/logo conta (escuro a esquerda -> dark)" bash -c "[[ \$('$MGR' --tone '$TS/menu-black.png') == dark ]]"
-mksolid "$TS/mid.png" 2 8 110 110
-mksolid "$TS/mid2.png" 2 8 140 140
-check "--tone: limiar entre cinza medio escuro (110) e claro (140)" bash -c "[[ \$('$MGR' --tone '$TS/mid.png') == dark && \$('$MGR' --tone '$TS/mid2.png') == light ]]"
+# Legibilidade (contraste >= 3:1): texto escuro a partir de L 0.133
+# (cinza ~102), texto #dddddd ate L 0.208 (cinza ~126)
+mksolid "$TS/g100.png" 2 8 100 100
+mksolid "$TS/g105.png" 2 8 105 105
+mksolid "$TS/g120.png" 2 8 120 120
+check "--tone: cinza 100 (so o texto claro e legivel) -> dark" bash -c "[[ \$('$MGR' --tone '$TS/g100.png') == dark ]]"
+check "--tone: cinza 105 e 120 (os dois legiveis: empate) -> light" bash -c "[[ \$('$MGR' --tone '$TS/g105.png') == light && \$('$MGR' --tone '$TS/g120.png') == light ]]"
+mkrgb "$TS/red.png" 224 32 16
+check "--tone: vermelho saturado (os dois textos legiveis) -> light" bash -c "[[ \$('$MGR' --tone '$TS/red.png') == light ]]"
+check "--tone: KAM_TONE_DEBUG mostra a legibilidade de cada tom" bash -c "KAM_TONE_DEBUG=1 '$MGR' --tone '$TS/g100.png' 2>&1 >/dev/null | grep -q 'texto escuro legivel em 0.0%, texto claro em 100.0%'"
+# Menu so com texto claro legivel (cinza 60) e logo so com texto escuro
+# (branco): areas com o mesmo peso dao empate (light) em qualquer resolucao
+mkbands "$TS/bands-small.png" 200 120 60 255
+mkbands "$TS/bands-big.png" 1920 1080 60 255
+check "--tone: menu e logo tem o mesmo peso, independente da resolucao" bash -c "[[ \$('$MGR' --tone '$TS/bands-small.png') == light && \$('$MGR' --tone '$TS/bands-big.png') == light ]]"
 mksolid "$TS/inter.png" 2 8 255 255 255 1
 expect_rc 3 "--tone: PNG entrelacado e recusado" "$MGR" --tone "$TS/inter.png"
 head -c 300 "$TS/white.png" > "$TS/trunc.png"
